@@ -1,7 +1,11 @@
-from os import getenv
-
 from celery import Celery
 
+from app.shared.config import Settings
 
-redis_url = getenv("REDIS_URL", "redis://redis:6379/0")
-celery_app = Celery("foreign_trade_worker", broker=redis_url, backend=redis_url)
+
+def create_worker_app() -> Celery:
+    settings = Settings.from_environment()
+    return Celery("foreign_trade_worker", broker=settings.redis_url, backend=settings.redis_url)
+
+
+celery_app = create_worker_app()
