@@ -20,11 +20,13 @@ V1 is a multi-tenant sales workbench for evidence-backed prospect discovery and 
    npm.cmd install
    ```
 
-4. Start PostgreSQL with pgvector, Redis, and MinIO:
+4. Start the full local runtime (web workbench, API, worker, PostgreSQL with pgvector, Redis, and MinIO):
 
    ```powershell
-   docker compose up -d postgres redis minio
+   docker compose up --build
    ```
+
+The workbench is available at `http://localhost:3000`, and the API health endpoint is `http://localhost:8000/health`.
 
 ## Verification
 
