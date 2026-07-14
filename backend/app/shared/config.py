@@ -35,7 +35,7 @@ class Settings:
             app_secret=app_secret,
             credential_encryption_key=credential_encryption_key,
             database_url=environment.get(
-                "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/foreign_trade"
+                "DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:5432/foreign_trade"
             ),
             redis_url=environment.get("REDIS_URL", "redis://redis:6379/0"),
             s3_endpoint=environment.get("S3_ENDPOINT", "http://minio:9000"),

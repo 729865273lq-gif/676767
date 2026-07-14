@@ -35,3 +35,9 @@ def test_settings_accepts_valid_runtime_configuration() -> None:
 
     assert settings.app_secret == environment["APP_SECRET"]
     assert settings.credential_encryption_key == environment["CREDENTIAL_ENCRYPTION_KEY"]
+
+
+def test_settings_default_database_url_uses_declared_postgresql_driver() -> None:
+    settings = Settings.from_environment(valid_environment())
+
+    assert settings.database_url.startswith("postgresql+psycopg://")

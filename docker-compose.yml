@@ -6,7 +6,7 @@ services:
     environment:
       APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY in .env}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/foreign_trade}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/foreign_trade}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
     ports:
@@ -33,7 +33,7 @@ services:
     environment:
       APP_SECRET: ${APP_SECRET:?set APP_SECRET in .env}
       CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:?set CREDENTIAL_ENCRYPTION_KEY in .env}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/foreign_trade}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/foreign_trade}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
     volumes:
