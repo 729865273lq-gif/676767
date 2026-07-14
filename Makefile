@@ -6,7 +6,7 @@ help:
 	@echo "Targets: up, test-backend, test-frontend, lint"
 
 up:
-	docker compose up -d postgres redis minio
+	docker compose up --build
 
 test-backend:
 	cd backend && .venv/Scripts/python.exe -m pytest -q
