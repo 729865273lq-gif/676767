@@ -1,3 +1,5 @@
+import time
+
 from cryptography.fernet import Fernet
 
 from fastapi.testclient import TestClient
@@ -9,6 +11,18 @@ from app.main import create_app
 from app.platform.models import ConnectorCredential, MembershipRole, Organization, User, UserMembership
 from app.shared.config import Settings
 from app.shared.db import Base
+from app.shared.security import PrincipalTokenCodec
+
+
+APP_SECRET = "a-local-test-secret-that-is-long-enough"
+
+
+def bearer_headers(user_id: str, expires_at: int | None = None) -> dict[str, str]:
+    token = PrincipalTokenCodec(APP_SECRET).issue(
+        user_id,
+        expires_at=expires_at or int(time.time()) + 3_600,
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 def configured_client() -> tuple[TestClient, sessionmaker]:
@@ -41,7 +55,7 @@ def configured_client() -> tuple[TestClient, sessionmaker]:
             ]
         )
     settings = Settings(
-        app_secret="a-local-test-secret-that-is-long-enough",
+        app_secret=APP_SECRET,
         credential_encryption_key=Fernet.generate_key().decode(),
         database_url="sqlite://",
         redis_url="redis://redis:6379/0",
@@ -60,10 +74,52 @@ def test_membership_route_denies_cross_tenant_read() -> None:
 
     response = client.get(
         f"/platform/organizations/{client.globex_id}/membership",  # type: ignore[attr-defined]
-        headers={"X-User-Id": client.member_id},  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
     )
 
     assert response.status_code == 403
+
+
+def test_caller_controlled_user_header_cannot_impersonate_member() -> None:
+    client, _ = configured_client()
+
+    response = client.get(
+        f"/platform/organizations/{client.acme_id}/membership",  # type: ignore[attr-defined]
+        headers={"X-User-Id": client.member_id},  # type: ignore[attr-defined]
+    )
+
+    assert response.status_code == 401
+    assert response.headers["WWW-Authenticate"] == "Bearer"
+
+
+def test_valid_signed_principal_can_read_own_membership() -> None:
+    client, _ = configured_client()
+
+    response = client.get(
+        f"/platform/organizations/{client.acme_id}/membership",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "member"
+
+
+def test_tampered_or_expired_principal_is_rejected() -> None:
+    client, _ = configured_client()
+    valid = bearer_headers(client.member_id)["Authorization"]
+    expired = bearer_headers(client.member_id, expires_at=int(time.time()) - 1)
+
+    tampered = client.get(
+        f"/platform/organizations/{client.acme_id}/membership",  # type: ignore[attr-defined]
+        headers={"Authorization": f"{valid}x"},
+    )
+    expired_response = client.get(
+        f"/platform/organizations/{client.acme_id}/membership",  # type: ignore[attr-defined]
+        headers=expired,
+    )
+
+    assert tampered.status_code == 401
+    assert expired_response.status_code == 401
 
 
 def test_credential_route_rejects_member_and_hides_admin_secret() -> None:
@@ -72,12 +128,12 @@ def test_credential_route_rejects_member_and_hides_admin_secret() -> None:
 
     denied = client.post(
         f"/platform/organizations/{client.acme_id}/credentials",  # type: ignore[attr-defined]
-        headers={"X-User-Id": client.member_id},  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
         json=payload,
     )
     approved = client.post(
         f"/platform/organizations/{client.acme_id}/credentials",  # type: ignore[attr-defined]
-        headers={"X-User-Id": client.admin_id},  # type: ignore[attr-defined]
+        headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
         json=payload,
     )
     with factory() as session:
