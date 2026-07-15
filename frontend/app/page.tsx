@@ -1,74 +1,49 @@
 "use client";
 
-import { FormEvent, useState } from "react";
-
-type Lead = {
-  company: string;
-  country: string;
-  category: string;
-  contact: string;
-  email: string;
-  score: number;
-  status: "Priority" | "Qualified" | "Research";
-  evidence: string;
-};
-
-const leadSeed: Lead[] = [
-  {
-    company: "LumenHaus GmbH",
-    country: "Germany",
-    category: "Lighting distributor",
-    contact: "Anna Weber, Procurement",
-    email: "procurement@lumenhaus.de",
-    score: 94,
-    status: "Priority",
-    evidence: "Commercial lighting portfolio and active project tender page",
-  },
-  {
-    company: "Rheinland Industriebedarf",
-    country: "Germany",
-    category: "Industrial supply",
-    contact: "Markus Klein, Category Lead",
-    email: "m.klein@rheinland-ib.de",
-    score: 88,
-    status: "Priority",
-    evidence: "Lists LED floodlight and warehouse refurbishment projects",
-  },
-  {
-    company: "Nordlicht Handel",
-    country: "Germany",
-    category: "Electrical wholesaler",
-    contact: "Contact research pending",
-    email: "sales@nordlicht-handel.de",
-    score: 72,
-    status: "Qualified",
-    evidence: "Business category and corporate contact channel verified",
-  },
-  {
-    company: "Bauwerk Lichtsysteme",
-    country: "Germany",
-    category: "Project integrator",
-    contact: "Sophie Hartmann, Project buyer",
-    email: "s.hartmann@bauwerk-licht.de",
-    score: 81,
-    status: "Qualified",
-    evidence: "Recent commercial retrofit case studies match target segment",
-  },
-];
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  ApiError,
+  createProductLine,
+  listLeads,
+  listProductLines,
+  startDiscovery,
+  type Lead,
+  type ProductLine,
+} from "../lib/api";
+import { clearSession, readSession, type Session } from "../lib/auth";
 
 const metrics = [
-  { label: "New leads", value: "36", note: "+12 vs. yesterday", tone: "blue" },
-  { label: "Priority leads", value: "18", note: "50% evidence complete", tone: "cyan" },
-  { label: "Drafts to review", value: "8", note: "3 need approval today", tone: "orange" },
-  { label: "Positive replies", value: "6", note: "Reply rate 12.5%", tone: "green" },
+  { label: "New leads", value: "36", note: "API-backed discovery ready", tone: "blue" },
+  { label: "Priority leads", value: "18", note: "Evidence gate enabled", tone: "cyan" },
+  { label: "Drafts to review", value: "8", note: "Email approval stays human-led", tone: "orange" },
+  { label: "Positive replies", value: "6", note: "Reply loop coming next", tone: "green" },
 ];
 
 const navItems = ["Overview", "Customer Agent", "CRM", "Email review", "Inbox", "Knowledge base"];
 
+const bucketLabel = {
+  priority_recommendation: "Priority",
+  needs_enrichment: "Needs enrichment",
+  not_qualified: "Not qualified",
+} as const;
+
+function parseCsv(value: FormDataEntryValue | null) {
+  return String(value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function scoreClass(score: number) {
   if (score >= 90) return "score scoreHigh";
-  if (score >= 80) return "score scoreMedium";
+  if (score >= 70) return "score scoreMedium";
   return "score scoreLow";
+}
+
+function bucketClass(bucket: Lead["bucket"]) {
+  if (bucket === "priority_recommendation") return "status statusPriority";
+  if (bucket === "needs_enrichment") return "status statusResearch";
+  return "status statusQualified";
 }
 
 function MetricTile({ label, value, note, tone }: (typeof metrics)[number]) {
@@ -82,54 +57,99 @@ function MetricTile({ label, value, note, tone }: (typeof metrics)[number]) {
   );
 }
 
-function LeadTable({ leads, priorityOnly, onPriorityToggle }: { leads: Lead[]; priorityOnly: boolean; onPriorityToggle: () => void }) {
-  const displayedLeads = priorityOnly ? leads.filter((lead) => lead.status === "Priority") : leads;
-
+function ProductLineSetup({
+  productLines,
+  loading,
+  creating,
+  onCreate,
+}: {
+  productLines: ProductLine[];
+  loading: boolean;
+  creating: boolean;
+  onCreate: (event: FormEvent<HTMLFormElement>) => void;
+}) {
   return (
-    <section className="dataSection" aria-labelledby="lead-results-title">
+    <section className="productPanel" aria-labelledby="product-lines-title">
       <div className="sectionHeader">
         <div>
-          <p className="sectionLabel">Customer Agent output</p>
-          <h2 id="lead-results-title">Recommended companies</h2>
+          <p className="sectionLabel">Product intelligence</p>
+          <h2 id="product-lines-title">Product lines</h2>
         </div>
-        <div className="tableActions">
-          <button className="textButton" type="button" onClick={onPriorityToggle}>
-            {priorityOnly ? "Show all leads" : "Show priority leads"}
-          </button>
-          <button className="outlineButton" type="button">Save selected</button>
-        </div>
+        <span className="countBadge">{loading ? "Loading" : `${productLines.length} configured`}</span>
       </div>
-      <div className="tableWrap">
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Company</th>
-              <th scope="col">Profile</th>
-              <th scope="col">Contact channel</th>
-              <th scope="col">Evidence</th>
-              <th scope="col">Fit score</th>
-              <th scope="col">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {displayedLeads.map((lead) => (
-              <tr key={lead.company}>
-                <td><strong>{lead.company}</strong><span>{lead.country}</span></td>
-                <td>{lead.category}</td>
-                <td><strong className="contactName">{lead.contact}</strong><span>{lead.email}</span></td>
-                <td className="evidence">{lead.evidence}</td>
-                <td><span className={scoreClass(lead.score)}>{lead.score}</span></td>
-                <td><span className={`status status${lead.status}`}>{lead.status}</span></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="productContent">
+        <form className="productForm" onSubmit={onCreate}>
+          <label>
+            Product line name
+            <input name="name" required placeholder="Industrial LED lighting" />
+          </label>
+          <label>
+            Product keywords
+            <input name="keywords" required placeholder="LED floodlight, warehouse lighting" />
+          </label>
+          <label>
+            Buyer profiles
+            <input name="buyer_profiles" required placeholder="Distributor, Project buyer" />
+          </label>
+          <label>
+            Target regions
+            <input name="target_regions" required placeholder="Europe, North America" />
+          </label>
+          <label className="wideField">
+            Description
+            <input name="description" placeholder="Commercial and industrial retrofit lighting" />
+          </label>
+          <button className="primaryButton" type="submit" disabled={creating}>
+            {creating ? "Creating..." : "Create product line"}
+          </button>
+        </form>
+        <div className="productList" aria-label="Configured product lines">
+          {productLines.length === 0 ? (
+            <div className="emptyState">Create the first product line before starting discovery.</div>
+          ) : (
+            productLines.map((productLine) => (
+              <article className="productItem" key={productLine.id}>
+                <strong>{productLine.name}</strong>
+                <span>{productLine.product_keywords.join(", ") || "No keywords"}</span>
+                <small>
+                  {productLine.buyer_profiles.join(", ") || "No buyer profiles"} /{" "}
+                  {productLine.target_regions.join(", ") || "No target regions"}
+                </small>
+              </article>
+            ))
+          )}
+        </div>
       </div>
     </section>
   );
 }
 
-function CustomerAgent({ onRun, running, complete }: { onRun: (event: FormEvent<HTMLFormElement>) => void; running: boolean; complete: boolean }) {
+function CustomerAgent({
+  productLines,
+  selectedProductLineId,
+  targetMarket,
+  buyerProfile,
+  running,
+  runMessage,
+  onProductLineChange,
+  onTargetMarketChange,
+  onBuyerProfileChange,
+  onRun,
+}: {
+  productLines: ProductLine[];
+  selectedProductLineId: string;
+  targetMarket: string;
+  buyerProfile: string;
+  running: boolean;
+  runMessage: string;
+  onProductLineChange: (value: string) => void;
+  onTargetMarketChange: (value: string) => void;
+  onBuyerProfileChange: (value: string) => void;
+  onRun: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  const selectedProductLine = productLines.find((item) => item.id === selectedProductLineId);
+  const buyerProfiles = selectedProductLine?.buyer_profiles ?? [];
+
   return (
     <section className="agentPanel" aria-labelledby="customer-agent-title">
       <div className="agentIntro">
@@ -142,35 +162,109 @@ function CustomerAgent({ onRun, running, complete }: { onRun: (event: FormEvent<
       </div>
       <form className="agentForm" onSubmit={onRun}>
         <label>
-          Product
-          <input aria-label="Product" defaultValue="Industrial LED lighting" name="product" required />
+          Product line
+          <select
+            aria-label="Discovery product line"
+            name="product_line_id"
+            required
+            value={selectedProductLineId}
+            onChange={(event) => onProductLineChange(event.target.value)}
+          >
+            <option value="">Select product line</option>
+            {productLines.map((productLine) => (
+              <option key={productLine.id} value={productLine.id}>{productLine.name}</option>
+            ))}
+          </select>
         </label>
         <label>
-          Target country
-          <select aria-label="Target country" defaultValue="Germany" name="country">
-            <option>Germany</option>
-            <option>France</option>
-            <option>United Kingdom</option>
-            <option>United States</option>
-          </select>
+          Target market
+          <input
+            aria-label="Discovery target market"
+            name="target_market"
+            required
+            value={targetMarket}
+            onChange={(event) => onTargetMarketChange(event.target.value)}
+          />
         </label>
         <label>
           Buyer profile
-          <select defaultValue="Distributor / project buyer" name="buyer">
-            <option>Distributor / project buyer</option>
-            <option>Manufacturer</option>
-            <option>Importer</option>
-            <option>Retail chain</option>
+          <select
+            aria-label="Discovery buyer profile"
+            name="buyer_profile"
+            value={buyerProfile}
+            onChange={(event) => onBuyerProfileChange(event.target.value)}
+          >
+            <option value="">Any buyer profile</option>
+            {buyerProfiles.map((profile) => (
+              <option key={profile} value={profile}>{profile}</option>
+            ))}
           </select>
         </label>
-        <button className="primaryButton" type="submit" disabled={running}>
+        <button className="primaryButton" type="submit" disabled={running || !selectedProductLineId}>
           {running ? "Building lead list..." : "Start discovery"}
         </button>
-        <div className={`runStatus ${complete ? "runComplete" : ""}`} aria-live="polite">
+        <div className={`runStatus ${runMessage.includes("complete") ? "runComplete" : ""}`} aria-live="polite">
           <span className="statusDot" aria-hidden="true" />
-          {complete ? "Discovery complete · 36 companies screened" : "Ready for a targeted discovery run"}
+          {runMessage}
         </div>
       </form>
+    </section>
+  );
+}
+
+function LeadTable({ leads, priorityOnly, onPriorityToggle }: { leads: Lead[]; priorityOnly: boolean; onPriorityToggle: () => void }) {
+  const displayedLeads = priorityOnly
+    ? leads.filter((lead) => lead.bucket === "priority_recommendation")
+    : leads;
+
+  return (
+    <section className="dataSection" aria-labelledby="lead-results-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="sectionLabel">Customer Agent output</p>
+          <h2 id="lead-results-title">Discovered companies</h2>
+        </div>
+        <div className="tableActions">
+          <button className="textButton" type="button" onClick={onPriorityToggle}>
+            {priorityOnly ? "Show all leads" : "Show priority leads"}
+          </button>
+          <button className="outlineButton" type="button" disabled>Save to CRM</button>
+        </div>
+      </div>
+      <div className="tableWrap">
+        {leads.length === 0 ? (
+          <div className="emptyState tableEmpty">Run discovery to populate evidence-backed leads.</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Company</th>
+                <th scope="col">Market / profile</th>
+                <th scope="col">Evidence</th>
+                <th scope="col">Reasons</th>
+                <th scope="col">Score</th>
+                <th scope="col">Bucket</th>
+              </tr>
+            </thead>
+            <tbody>
+              {displayedLeads.map((lead) => (
+                <tr key={lead.id}>
+                  <td><strong>{lead.company_name}</strong><span>{lead.website}</span></td>
+                  <td><strong className="contactName">{lead.target_market}</strong><span>{lead.buyer_profile ?? "Any profile"}</span></td>
+                  <td className="evidence">
+                    {lead.evidence.length > 0 ? lead.evidence[0].source_excerpt : "No source excerpt recorded"}
+                  </td>
+                  <td className="evidence">
+                    {lead.reasons.join("; ") || lead.missing_signals.join("; ") || "No scoring details"}
+                  </td>
+                  <td><span className={scoreClass(lead.score)}>{lead.score}</span></td>
+                  <td><span className={bucketClass(lead.bucket)}>{bucketLabel[lead.bucket]}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </section>
   );
 }
@@ -212,8 +306,8 @@ function FollowUpTimeline() {
       </div>
       <ol className="timeline">
         <li><time>09:30</time><span className="timelineDot blueDot" /><div><strong>Reply needs review</strong><p>HelioTech AG asked for the 2026 catalog.</p></div></li>
-        <li><time>11:00</time><span className="timelineDot cyanDot" /><div><strong>Send approved introduction</strong><p>LumenHaus GmbH · owner: Mia Chen</p></div></li>
-        <li><time>Tomorrow</time><span className="timelineDot orangeDot" /><div><strong>Follow up on quotation</strong><p>Rheinland Industriebedarf · no reply in 4 days</p></div></li>
+        <li><time>11:00</time><span className="timelineDot cyanDot" /><div><strong>Send approved introduction</strong><p>LumenHaus GmbH / owner: Mia Chen</p></div></li>
+        <li><time>Tomorrow</time><span className="timelineDot orangeDot" /><div><strong>Follow up on quotation</strong><p>Rheinland Industriebedarf / no reply in 4 days</p></div></li>
       </ol>
     </section>
   );
@@ -227,13 +321,13 @@ function ReviewDrawer({ open, onClose }: { open: boolean; onClose: () => void })
       <aside className="reviewDrawer" aria-label="Email review queue" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawerHeader">
           <div><p className="sectionLabel">Email Agent</p><h2>Email review queue</h2></div>
-          <button className="closeButton" type="button" aria-label="Close review queue" onClick={onClose}>×</button>
+          <button className="closeButton" type="button" aria-label="Close review queue" onClick={onClose}>x</button>
         </div>
         <p className="drawerCopy">Every draft passed language, product evidence, personalization and call-to-action checks before review.</p>
         <article className="draftCard">
           <span className="status statusPriority">Priority lead</span>
           <h3>Lighting solutions for commercial retrofit projects</h3>
-          <p>To: Anna Weber · LumenHaus GmbH</p>
+          <p>To: Anna Weber / LumenHaus GmbH</p>
           <div className="draftEvidence"><span>Product catalog cited</span><span>Project evidence cited</span></div>
           <div className="drawerActions"><button className="outlineButton" type="button">Edit draft</button><button className="primaryButton" type="button">Approve to send</button></div>
         </article>
@@ -245,19 +339,125 @@ function ReviewDrawer({ open, onClose }: { open: boolean; onClose: () => void })
 
 export default function HomePage() {
   const [activeNav, setActiveNav] = useState("Overview");
+  const [session, setSession] = useState<Session | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+  const [loadingProductLines, setLoadingProductLines] = useState(false);
+  const [creatingProductLine, setCreatingProductLine] = useState(false);
+  const [productLines, setProductLines] = useState<ProductLine[]>([]);
+  const [selectedProductLineId, setSelectedProductLineId] = useState("");
+  const [targetMarket, setTargetMarket] = useState("Germany");
+  const [buyerProfile, setBuyerProfile] = useState("");
+  const [leads, setLeads] = useState<Lead[]>([]);
   const [running, setRunning] = useState(false);
-  const [complete, setComplete] = useState(false);
+  const [runMessage, setRunMessage] = useState("Create or select a product line to start discovery");
   const [priorityOnly, setPriorityOnly] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [error, setError] = useState("");
 
-  function runDiscovery(event: FormEvent<HTMLFormElement>) {
+  const selectedProductLine = useMemo(
+    () => productLines.find((productLine) => productLine.id === selectedProductLineId),
+    [productLines, selectedProductLineId]
+  );
+
+  useEffect(() => {
+    const currentSession = readSession();
+    if (!currentSession) {
+      window.location.assign("/login");
+      return;
+    }
+    setSession(currentSession);
+    setCheckingSession(false);
+    setLoadingProductLines(true);
+    listProductLines(currentSession)
+      .then((items) => {
+        setProductLines(items);
+        if (items.length > 0) {
+          setSelectedProductLineId(items[0].id);
+          setBuyerProfile(items[0].buyer_profiles[0] ?? "");
+          setRunMessage("Ready for a targeted discovery run");
+        }
+      })
+      .catch((caught: unknown) => handleApiFailure(caught, "Could not load product lines"))
+      .finally(() => setLoadingProductLines(false));
+  }, []);
+
+  function handleApiFailure(caught: unknown, fallback: string) {
+    if (caught instanceof ApiError && caught.status === 401) {
+      clearSession();
+      window.location.assign("/login");
+      return;
+    }
+    setError(caught instanceof Error ? caught.message : fallback);
+  }
+
+  function logout() {
+    clearSession();
+    window.location.assign("/login");
+  }
+
+  function selectProductLine(productLineId: string) {
+    setSelectedProductLineId(productLineId);
+    const productLine = productLines.find((item) => item.id === productLineId);
+    setBuyerProfile(productLine?.buyer_profiles[0] ?? "");
+  }
+
+  async function createProductLineFromForm(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!session) return;
+    setCreatingProductLine(true);
+    setError("");
+    const form = new FormData(event.currentTarget);
+    try {
+      const created = await createProductLine(session, {
+        name: String(form.get("name") ?? "").trim(),
+        description: String(form.get("description") ?? "").trim(),
+        product_keywords: parseCsv(form.get("keywords")),
+        buyer_profiles: parseCsv(form.get("buyer_profiles")),
+        target_regions: parseCsv(form.get("target_regions")),
+      });
+      setProductLines((current) => [...current, created]);
+      setSelectedProductLineId(created.id);
+      setBuyerProfile(created.buyer_profiles[0] ?? "");
+      setRunMessage("Ready for a targeted discovery run");
+      event.currentTarget.reset();
+    } catch (caught) {
+      handleApiFailure(caught, "Could not create product line");
+    } finally {
+      setCreatingProductLine(false);
+    }
+  }
+
+  async function runDiscovery(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !selectedProductLineId) return;
     setRunning(true);
-    setComplete(false);
-    window.setTimeout(() => {
+    setError("");
+    setRunMessage("Discovery running");
+    try {
+      const run = await startDiscovery(session, {
+        product_line_id: selectedProductLineId,
+        target_market: targetMarket.trim(),
+        buyer_profile: buyerProfile || undefined,
+        limit: 20,
+      });
+      const nextLeads = await listLeads(session, run.workflow_run_id);
+      setLeads(nextLeads);
+      setRunMessage(`Discovery complete / ${run.lead_count} companies screened / ${run.query}`);
+    } catch (caught) {
+      handleApiFailure(caught, "Customer discovery failed");
+      setRunMessage("Discovery failed");
+    } finally {
       setRunning(false);
-      setComplete(true);
-    }, 700);
+    }
+  }
+
+  if (checkingSession || !session) {
+    return (
+      <main className="authCheck">
+        <span className="statusDot" aria-hidden="true" />
+        Loading workspace...
+      </main>
+    );
   }
 
   return (
@@ -271,22 +471,35 @@ export default function HomePage() {
             </button>
           ))}
         </nav>
-        <div className="sidebarFooter"><span className="connectionDot" />System operational<span className="tenant">NOVA EXPORT</span></div>
+        <div className="sidebarFooter"><span className="connectionDot" />System operational<span className="tenant">{session.organization_role ?? "MEMBER"}</span></div>
       </aside>
       <section className="workspace" id="top">
         <header className="topbar">
           <div className="crumbs"><span>Sales workspace</span><strong>{activeNav}</strong></div>
-          <div className="topbarActions"><button className="utilityButton" type="button">EN</button><button className="profileButton" type="button" aria-label="Open Mia Chen profile">MC</button></div>
+          <div className="topbarActions"><button className="utilityButton" type="button">EN</button><button className="utilityButton logoutButton" type="button" onClick={logout}>Logout</button><button className="profileButton" type="button" aria-label="Open Mia Chen profile">MC</button></div>
         </header>
         <div className="content">
           <section className="pageHeading">
-            <div><p className="sectionLabel">Monday, 14 July</p><h1>Sales command center</h1><p>Prioritize verified buyers, approve strong outreach, and keep every next step moving.</p></div>
+            <div><p className="sectionLabel">Customer development</p><h1>Sales command center</h1><p>Configure product lines, launch evidence-backed customer discovery, and move qualified leads toward CRM and outreach.</p></div>
             <button className="outlineButton exportButton" type="button">Export activity</button>
           </section>
+          {error && <div className="errorBanner" role="alert">{error}</div>}
           <section className="metricGrid" aria-label="Sales metrics">{metrics.map((metric) => <MetricTile key={metric.label} {...metric} />)}</section>
-          <CustomerAgent onRun={runDiscovery} running={running} complete={complete} />
+          <ProductLineSetup productLines={productLines} loading={loadingProductLines} creating={creatingProductLine} onCreate={createProductLineFromForm} />
+          <CustomerAgent
+            productLines={productLines}
+            selectedProductLineId={selectedProductLineId}
+            targetMarket={targetMarket}
+            buyerProfile={buyerProfile}
+            running={running}
+            runMessage={selectedProductLine ? runMessage : "Create the first product line before discovery"}
+            onProductLineChange={selectProductLine}
+            onTargetMarketChange={setTargetMarket}
+            onBuyerProfileChange={setBuyerProfile}
+            onRun={runDiscovery}
+          />
           <div className="secondaryGrid"><ReviewQueue onOpen={() => setReviewOpen(true)} /><FollowUpTimeline /></div>
-          <LeadTable leads={leadSeed} priorityOnly={priorityOnly} onPriorityToggle={() => setPriorityOnly((current) => !current)} />
+          <LeadTable leads={leads} priorityOnly={priorityOnly} onPriorityToggle={() => setPriorityOnly((current) => !current)} />
         </div>
       </section>
       <ReviewDrawer open={reviewOpen} onClose={() => setReviewOpen(false)} />

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("runs a customer discovery task and surfaces review work", async ({ page }) => {
+test("creates a product line and displays discovered leads", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem(
       "trade-axis-session",
@@ -12,24 +12,44 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
       })
     );
   });
+
   await page.route(/\/platform\/organizations\/org-1\/product-lines$/, async (route) => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+      return;
+    }
+
+    const payload = route.request().postDataJSON();
+    expect(payload).toMatchObject({
+      name: "Industrial LED lighting",
+      product_keywords: ["LED floodlight", "warehouse lighting"],
+      buyer_profiles: ["Distributor", "Project buyer"],
+      target_regions: ["Europe", "North America"],
+    });
     await route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify([
-        {
-          id: "product-1",
-          name: "Industrial LED lighting",
-          description: "Commercial and industrial retrofit lighting.",
-          product_keywords: ["LED floodlight", "warehouse lighting"],
-          buyer_profiles: ["Distributor", "Project buyer"],
-          target_regions: ["Europe", "North America"],
-          is_active: true,
-          suppliers: [],
-        },
-      ]),
+      status: 201,
+      body: JSON.stringify({
+        id: "product-1",
+        name: payload.name,
+        description: payload.description,
+        product_keywords: payload.product_keywords,
+        buyer_profiles: payload.buyer_profiles,
+        target_regions: payload.target_regions,
+        is_active: true,
+        suppliers: [],
+      }),
     });
   });
+
   await page.route(/\/discovery\/organizations\/org-1\/runs$/, async (route) => {
+    const payload = route.request().postDataJSON();
+    expect(payload).toMatchObject({
+      product_line_id: "product-1",
+      target_market: "Germany",
+      buyer_profile: "Distributor",
+      limit: 20,
+    });
     await route.fulfill({
       contentType: "application/json",
       status: 201,
@@ -41,6 +61,7 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
       }),
     });
   });
+
   await page.route(/\/discovery\/organizations\/org-1\/leads\?workflow_run_id=run-1$/, async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -65,34 +86,20 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
             },
           ],
         },
-        {
-          id: "lead-2",
-          workflow_run_id: "run-1",
-          product_line_id: "product-1",
-          company_name: "Rheinland Industriebedarf",
-          website: "https://rheinland.example",
-          target_market: "Germany",
-          buyer_profile: "Project buyer",
-          score: 92,
-          bucket: "priority_recommendation",
-          reasons: ["verified website", "usable contact channel"],
-          missing_signals: [],
-          evidence: [
-            {
-              source_url: "https://rheinland.example",
-              source_excerpt: "Lists warehouse lighting retrofit projects",
-              signal_name: "search_result",
-            },
-          ],
-        },
       ]),
     });
   });
+
   await page.goto("/");
+  await page.getByLabel("Product line name").fill("Industrial LED lighting");
+  await page.getByLabel("Product keywords").fill("LED floodlight, warehouse lighting");
+  await page.getByLabel("Buyer profiles").fill("Distributor, Project buyer");
+  await page.getByLabel("Target regions").fill("Europe, North America");
+  await page.getByRole("button", { name: "Create product line" }).click();
 
-  await expect(page.getByRole("heading", { name: "Sales command center" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Customer Agent" })).toBeVisible();
-
+  await expect(
+    page.getByLabel("Configured product lines").getByText("Industrial LED lighting")
+  ).toBeVisible();
   await page.getByLabel("Discovery product line").selectOption("product-1");
   await page.getByLabel("Discovery target market").fill("Germany");
   await page.getByLabel("Discovery buyer profile").selectOption("Distributor");
@@ -100,11 +107,6 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
 
   await expect(page.getByText("Discovery complete")).toBeVisible();
   await expect(page.getByRole("cell", { name: "LumenHaus GmbH" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Show priority leads" })).toBeVisible();
-
-  await page.getByRole("button", { name: "Show priority leads" }).click();
-  await expect(page.getByRole("cell", { name: "LumenHaus GmbH" })).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Review 8 drafts" }).click();
-  await expect(page.getByText("Email review queue")).toBeVisible();
+  await expect(page.getByText("Commercial lighting distributor")).toBeVisible();
+  await expect(page.getByText("Needs enrichment")).toBeVisible();
 });
