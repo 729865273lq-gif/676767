@@ -8,10 +8,12 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.main import create_app
-from app.platform.models import ConnectorCredential, MembershipRole, Organization, User, UserMembership
+from app.crm.models import Lead, LeadBucket, LeadEvidence
+from app.platform.models import ConnectorCredential, MembershipRole, Organization, ProductLine, User, UserMembership
 from app.shared.config import Settings
 from app.shared.db import Base
 from app.shared.security import PrincipalTokenCodec
+from app.workflow.models import WorkflowRun
 
 
 APP_SECRET = "a-local-test-secret-that-is-long-enough"
@@ -197,4 +199,62 @@ def test_product_line_routes_enforce_roles_and_organization_scope() -> None:
     assert supplier.status_code == 201
     assert listed.status_code == 200
     assert listed.json()[0]["suppliers"] == ["NOVA Lighting Factory"]
+    assert cross_tenant.status_code == 403
+
+
+def test_discovery_lead_routes_return_evidence_only_within_the_organization() -> None:
+    client, factory = configured_client()
+    with factory.begin() as session:
+        product_line = ProductLine(organization_id=client.acme_id, name="Lighting")  # type: ignore[attr-defined]
+        session.add(product_line)
+        session.flush()
+        workflow_run = WorkflowRun(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            agent_id="customer",
+            agent_version="1.0.0",
+            input_json={},
+            idempotency_key="lead-route-run",
+        )
+        session.add(workflow_run)
+        session.flush()
+        lead = Lead(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            workflow_run_id=workflow_run.id,
+            product_line_id=product_line.id,
+            company_name="LumenHaus GmbH",
+            website="https://lumenhaus.example",
+            canonical_domain="lumenhaus.example",
+            target_market="Germany",
+            buyer_profile="distributor",
+            score=60,
+            bucket=LeadBucket.NEEDS_ENRICHMENT,
+            reasons=["product or business fit evidence recorded"],
+            missing_signals=["usable contact channel"],
+        )
+        session.add(lead)
+        session.flush()
+        session.add(
+            LeadEvidence(
+                lead_id=lead.id,
+                source_url=lead.website,
+                source_excerpt="Commercial lighting distributor",
+                signal_name="search_result",
+            )
+        )
+    response = client.get(
+        f"/discovery/organizations/{client.acme_id}/leads?bucket=needs_enrichment",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    detail = client.get(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead.id}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    cross_tenant = client.get(
+        f"/discovery/organizations/{client.globex_id}/leads",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["bucket"] == "needs_enrichment"
+    assert detail.json()["evidence"][0]["source_excerpt"] == "Commercial lighting distributor"
     assert cross_tenant.status_code == 403

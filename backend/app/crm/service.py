@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents.base.contracts import SearchResult
-from app.crm.models import Lead, LeadEvidence
+from app.crm.models import Lead, LeadBucket, LeadEvidence
 from app.crm.scoring import LeadQualification
 
 
@@ -62,6 +62,37 @@ class LeadService:
         )
         self.session.flush()
         return lead
+
+    def list_leads(
+        self,
+        *,
+        organization_id: str,
+        bucket: LeadBucket | None = None,
+        workflow_run_id: str | None = None,
+    ) -> list[Lead]:
+        statement = select(Lead).where(Lead.organization_id == organization_id)
+        if bucket is not None:
+            statement = statement.where(Lead.bucket == bucket)
+        if workflow_run_id is not None:
+            statement = statement.where(Lead.workflow_run_id == workflow_run_id)
+        return list(self.session.scalars(statement.order_by(Lead.score.desc(), Lead.company_name)))
+
+    def get_lead(self, lead_id: str, organization_id: str) -> Lead:
+        lead = self.session.scalar(
+            select(Lead).where(Lead.id == lead_id, Lead.organization_id == organization_id)
+        )
+        if lead is None:
+            raise LookupError("lead not found")
+        return lead
+
+    def evidence_for_lead(self, lead_id: str) -> list[LeadEvidence]:
+        return list(
+            self.session.scalars(
+                select(LeadEvidence)
+                .where(LeadEvidence.lead_id == lead_id)
+                .order_by(LeadEvidence.captured_at)
+            )
+        )
 
 
 def canonical_domain(url: str) -> str:
