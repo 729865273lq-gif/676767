@@ -281,3 +281,19 @@ def test_register_creates_admin_and_login_issues_a_bearer_token() -> None:
     assert logged_in.json()["organization_id"] == registered.json()["organization_id"]
     assert logged_in.json()["access_token"]
     assert rejected.status_code == 401
+
+
+def test_frontend_origin_can_post_to_auth_routes() -> None:
+    client, _ = configured_client()
+
+    response = client.options(
+        "/platform/auth/login",
+        headers={
+            "Origin": "http://127.0.0.1:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:3000"
