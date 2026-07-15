@@ -28,9 +28,11 @@ def create_app(session_factory: sessionmaker | None = None, settings: Settings |
         return {"service": "foreign-trade-api", "status": "ok"}
 
     from app.platform.router import router as platform_router
+    from app.agents.customer.router import router as discovery_router
     from app.workflow.router import router as workflow_router
 
     app.include_router(platform_router)
+    app.include_router(discovery_router)
     app.include_router(workflow_router)
 
     return app
