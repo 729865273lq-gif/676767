@@ -154,3 +154,47 @@ def test_lifespan_builds_runtime_session_factory_from_safe_settings(monkeypatch)
     with TestClient(create_app()) as client:
         assert client.app.state.settings.database_url == "sqlite+pysqlite:///:memory:"
         assert client.app.state.session_factory is not None
+
+
+def test_product_line_routes_enforce_roles_and_organization_scope() -> None:
+    client, _ = configured_client()
+    payload = {
+        "name": "Industrial LED Lighting",
+        "description": "Commercial and industrial retrofit lighting.",
+        "product_keywords": ["LED floodlight", "warehouse lighting", "LED floodlight"],
+        "buyer_profiles": ["distributor", "project buyer"],
+        "target_regions": ["Europe", "North America"],
+    }
+
+    denied = client.post(
+        f"/platform/organizations/{client.acme_id}/product-lines",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json=payload,
+    )
+    created = client.post(
+        f"/platform/organizations/{client.acme_id}/product-lines",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
+        json=payload,
+    )
+    product_line_id = created.json()["id"]
+    supplier = client.post(
+        f"/platform/organizations/{client.acme_id}/product-lines/{product_line_id}/suppliers",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
+        json={"name": "NOVA Lighting Factory", "website": "https://nova.example"},
+    )
+    listed = client.get(
+        f"/platform/organizations/{client.acme_id}/product-lines",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    cross_tenant = client.get(
+        f"/platform/organizations/{client.globex_id}/product-lines",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert denied.status_code == 403
+    assert created.status_code == 201
+    assert created.json()["product_keywords"] == ["LED floodlight", "warehouse lighting"]
+    assert supplier.status_code == 201
+    assert listed.status_code == 200
+    assert listed.json()[0]["suppliers"] == ["NOVA Lighting Factory"]
+    assert cross_tenant.status_code == 403

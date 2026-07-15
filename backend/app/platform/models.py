@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.db import Base
@@ -65,6 +65,46 @@ class ConnectorCredential(Base):
     key_label: Mapped[str] = mapped_column(String(200), nullable=False)
     ciphertext: Mapped[str] = mapped_column(String(), nullable=False)
     last_four: Mapped[str] = mapped_column(String(4), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class ProductLine(Base):
+    __tablename__ = "product_lines"
+    __table_args__ = (UniqueConstraint("organization_id", "name", name="uq_product_line_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    product_keywords: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    buyer_profiles: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    target_regions: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class ProductSupplier(Base):
+    __tablename__ = "product_suppliers"
+    __table_args__ = (UniqueConstraint("product_line_id", "name", name="uq_supplier_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product_line_id: Mapped[str] = mapped_column(
+        ForeignKey("product_lines.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    website: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
