@@ -4,14 +4,31 @@ from collections.abc import Generator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.platform.credentials import CredentialCipher, CredentialService
+from app.platform.auth import AuthService
+from app.platform.models import UserMembership
 from app.platform.product_lines import ProductLineNotFound, ProductLineService
 from app.platform.service import OrganizationService, TenantAccessDenied
 from app.shared.security import InvalidPrincipalToken, PrincipalTokenCodec, SignedPrincipal
+import time
 
 router = APIRouter(prefix="/platform", tags=["platform"])
+
+class RegisterRequest(BaseModel):
+    organization_name: str = Field(min_length=1, max_length=200)
+    display_name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=12, max_length=200)
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+class SessionResponse(BaseModel):
+    access_token: str
+    user_id: str
+    organization_id: str
 
 
 class CreateCredentialRequest(BaseModel):
@@ -134,6 +151,26 @@ def create_credential(
         key_label=credential.key_label,
         last_four=credential.last_four,
     )
+
+@router.post("/auth/register", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
+def register(payload: RegisterRequest, request: Request, session: Session = Depends(get_session)) -> SessionResponse:
+    try:
+        user, organization = AuthService(session).register(payload.organization_name, payload.display_name, payload.email, payload.password)
+        session.commit()
+    except ValueError as error:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    token = PrincipalTokenCodec(request.app.state.settings.app_secret).issue(user.id, expires_at=int(time.time()) + 86400)
+    return SessionResponse(access_token=token, user_id=user.id, organization_id=organization.id)
+
+@router.post("/auth/login", response_model=SessionResponse)
+def login(payload: LoginRequest, request: Request, session: Session = Depends(get_session)) -> SessionResponse:
+    user = AuthService(session).authenticate(payload.email, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="invalid email or password")
+    membership = session.scalar(select(UserMembership).where(UserMembership.user_id == user.id))
+    token = PrincipalTokenCodec(request.app.state.settings.app_secret).issue(user.id, expires_at=int(time.time()) + 86400)
+    return SessionResponse(access_token=token, user_id=user.id, organization_id=membership.organization_id)
 
 
 def product_line_response(product_line, suppliers: list[str]) -> ProductLineResponse:

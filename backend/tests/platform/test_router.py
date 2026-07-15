@@ -258,3 +258,26 @@ def test_discovery_lead_routes_return_evidence_only_within_the_organization() ->
     assert response.json()[0]["bucket"] == "needs_enrichment"
     assert detail.json()["evidence"][0]["source_excerpt"] == "Commercial lighting distributor"
     assert cross_tenant.status_code == 403
+
+
+def test_register_creates_admin_and_login_issues_a_bearer_token() -> None:
+    client, factory = configured_client()
+    payload = {
+        "organization_name": "Nova Export",
+        "display_name": "Mia Chen",
+        "email": "mia@example.com",
+        "password": "a-long-local-password",
+    }
+    registered = client.post("/platform/auth/register", json=payload)
+    logged_in = client.post(
+        "/platform/auth/login", json={"email": payload["email"], "password": payload["password"]}
+    )
+    rejected = client.post(
+        "/platform/auth/login", json={"email": payload["email"], "password": "wrong-password"}
+    )
+
+    assert registered.status_code == 201
+    assert logged_in.status_code == 200
+    assert logged_in.json()["organization_id"] == registered.json()["organization_id"]
+    assert logged_in.json()["access_token"]
+    assert rejected.status_code == 401
