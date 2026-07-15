@@ -19,6 +19,7 @@ class Settings:
     database_url: str
     redis_url: str
     s3_endpoint: str
+    bocha_api_key: str | None = None
 
     @classmethod
     def from_environment(cls, values: Mapping[str, str] | None = None) -> "Settings":
@@ -39,6 +40,7 @@ class Settings:
             ),
             redis_url=environment.get("REDIS_URL", "redis://redis:6379/0"),
             s3_endpoint=environment.get("S3_ENDPOINT", "http://minio:9000"),
+            bocha_api_key=_optional_secret(environment, "BOCHA_API_KEY"),
         )
 
 
@@ -48,4 +50,11 @@ def _required_secret(environment: Mapping[str, str], name: str) -> str:
         raise ConfigurationError(f"{name} must be configured with a non-placeholder value")
     if name == "APP_SECRET" and len(value) < 32:
         raise ConfigurationError("APP_SECRET must contain at least 32 characters")
+    return value
+
+
+def _optional_secret(environment: Mapping[str, str], name: str) -> str | None:
+    value = environment.get(name, "").strip()
+    if not value or value.lower().startswith(PLACEHOLDER_PREFIXES):
+        return None
     return value

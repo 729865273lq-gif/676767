@@ -9,6 +9,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/foreign_trade}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      BOCHA_API_KEY: ${BOCHA_API_KEY:-}
     ports:
       - "8000:8000"
     volumes:
@@ -36,6 +37,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://postgres:postgres@postgres:5432/foreign_trade}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      BOCHA_API_KEY: ${BOCHA_API_KEY:-}
     volumes:
       - ./backend:/app
     depends_on:
