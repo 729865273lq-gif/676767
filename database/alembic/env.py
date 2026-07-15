@@ -12,6 +12,7 @@ workspace_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(workspace_root / "backend"))
 
 from app.platform import models as platform_models  # noqa: F401, E402
+from app.workflow import models as workflow_models  # noqa: F401, E402
 from app.shared.db import Base  # noqa: E402
 
 config = context.config
