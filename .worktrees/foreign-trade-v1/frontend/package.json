@@ -1,0 +1,26 @@
+{
+  "name": "foreign-trade-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "next": "15.3.4",
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.54.1",
+    "@types/node": "24.0.13",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "eslint": "9.30.1",
+    "eslint-config-next": "15.3.4",
+    "typescript": "5.8.3"
+  }
+}
