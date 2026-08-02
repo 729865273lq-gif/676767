@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
 test("runs a customer discovery task and surfaces review work", async ({ page }) => {
   await page.addInitScript(() => {
@@ -112,7 +113,20 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
 
   await expect(page.getByText("搜索完成")).toBeVisible();
   await expect(page.locator("tbody").getByText("LumenHaus GmbH")).toBeVisible();
+  await expect(page.getByLabel("销售指标").locator(".metricTile").filter({ hasText: "新增线索" }).getByText("2")).toBeVisible();
+  await expect(page.getByLabel("销售指标").locator(".metricTile").filter({ hasText: "优先客户" }).getByText("1")).toBeVisible();
   await expect(page.getByRole("button", { name: "只看优先客户" })).toBeVisible();
+
+  const [download] = await Promise.all([
+    page.waitForEvent("download"),
+    page.getByRole("button", { name: "导出活动" }).click(),
+  ]);
+  expect(download.suggestedFilename()).toMatch(/^trade-axis-activity-\d{4}-\d{2}-\d{2}\.csv$/);
+  const downloadPath = await download.path();
+  expect(downloadPath).not.toBeNull();
+  const csv = await readFile(downloadPath!, "utf8");
+  expect(csv).toContain("LumenHaus GmbH");
+  expect(csv).toContain("lead");
 
   await page.getByRole("button", { name: "只看优先客户" }).click();
   await expect(page.locator("tbody").getByText("LumenHaus GmbH")).toHaveCount(0);

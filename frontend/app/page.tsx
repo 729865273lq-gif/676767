@@ -30,12 +30,12 @@ import {
 } from "../lib/api";
 import { clearSession, readSession, type Session } from "../lib/auth";
 
-const metrics = [
-  { label: "新增线索", value: "36", note: "已接入 API 搜索", tone: "blue" },
-  { label: "优先客户", value: "18", note: "已启用证据评分", tone: "cyan" },
-  { label: "待审核邮件", value: "8", note: "邮件坚持人工审批", tone: "orange" },
-  { label: "积极回复", value: "6", note: "回复跟进下一步接入", tone: "green" },
-];
+type Metric = {
+  label: string;
+  value: string;
+  note: string;
+  tone: "blue" | "cyan" | "orange" | "green";
+};
 
 const navItems = ["总览", "客户搜索 Agent", "CRM", "邮件审核", "收件箱", "知识库"];
 
@@ -85,7 +85,7 @@ function bucketClass(bucket: Lead["bucket"]) {
   return "status statusQualified";
 }
 
-function MetricTile({ label, value, note, tone }: (typeof metrics)[number]) {
+function MetricTile({ label, value, note, tone }: Metric) {
   return (
     <article className="metricTile">
       <span className={`metricRail ${tone}`} aria-hidden="true" />
@@ -94,6 +94,62 @@ function MetricTile({ label, value, note, tone }: (typeof metrics)[number]) {
       <small>{note}</small>
     </article>
   );
+}
+
+function buildMetrics(leads: Lead[], drafts: EmailDraft[], followUps: FollowUpRecord[]): Metric[] {
+  const newLeads = leads.filter((lead) => lead.status === "new").length;
+  const priorityLeads = leads.filter((lead) => lead.bucket === "priority_recommendation").length;
+  const pendingDrafts = drafts.filter((draft) => draft.status === "pending_approval").length;
+  const scheduledFollowUps = followUps.filter((record) => record.next_follow_up_at).length;
+  return [
+    { label: "新增线索", value: String(newLeads), note: "未入库客户线索", tone: "blue" },
+    { label: "优先客户", value: String(priorityLeads), note: "证据评分优先推荐", tone: "cyan" },
+    { label: "待审核邮件", value: String(pendingDrafts), note: "坚持人工审批", tone: "orange" },
+    { label: "待跟进", value: String(scheduledFollowUps), note: "已有下次跟进时间", tone: "green" },
+  ];
+}
+
+function csvCell(value: string | number | null | undefined) {
+  const text = String(value ?? "");
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+}
+
+function buildActivityCsv(
+  leads: Lead[],
+  drafts: EmailDraft[],
+  followUps: FollowUpRecord[]
+) {
+  const rows = [
+    ["type", "company", "status", "subject_or_activity", "detail", "next_follow_up_at", "created_or_updated_at"],
+    ...leads.map((lead) => [
+      "lead",
+      lead.company_name,
+      leadStatusLabel[lead.status],
+      bucketLabel[lead.bucket],
+      `${lead.target_market} / ${lead.buyer_profile ?? "不限类型"} / ${lead.website}`,
+      "",
+      "",
+    ]),
+    ...drafts.map((draft) => [
+      "email_draft",
+      draft.lead_company_name,
+      emailDraftStatusLabel[draft.status],
+      draft.subject,
+      `${draft.contact_name} / ${draft.contact_email}`,
+      "",
+      draft.sent_at ?? draft.reviewed_at ?? draft.updated_at,
+    ]),
+    ...followUps.map((record) => [
+      "follow_up",
+      record.lead_company_name ?? "",
+      record.lead_status ? leadStatusLabel[record.lead_status] : "",
+      followUpActivityLabel(record.activity_type),
+      record.content,
+      record.next_follow_up_at ?? "",
+      record.created_at,
+    ]),
+  ];
+  return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
 
 function ProductLineSetup({
@@ -935,6 +991,10 @@ export default function HomePage() {
     () => emailDrafts.find((draft) => draft.id === selectedDraftId) ?? emailDrafts[0] ?? null,
     [emailDrafts, selectedDraftId]
   );
+  const dashboardMetrics = useMemo(
+    () => buildMetrics(leads, emailDrafts, followUps),
+    [leads, emailDrafts, followUps]
+  );
 
   useEffect(() => {
     const currentSession = readSession();
@@ -1017,6 +1077,19 @@ export default function HomePage() {
   function logout() {
     clearSession();
     window.location.assign("/login");
+  }
+
+  function exportActivityCsv() {
+    const csv = buildActivityCsv(leads, emailDrafts, followUps);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `trade-axis-activity-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }
 
   function selectProductLine(productLineId: string) {
@@ -1401,10 +1474,12 @@ export default function HomePage() {
         <div className="content">
           <section className="pageHeading">
             <div><p className="sectionLabel">客户开发</p><h1>外贸客户开发工作台</h1><p>配置产品线，启动基于公开证据的客户搜索，并把合格线索推进到 CRM 和开发信流程。</p></div>
-            <button className="outlineButton exportButton" type="button">导出活动</button>
+            <button className="outlineButton exportButton" type="button" onClick={exportActivityCsv}>
+              导出活动
+            </button>
           </section>
           {error && <div className="errorBanner" role="alert">{error}</div>}
-          <section className="metricGrid" aria-label="销售指标">{metrics.map((metric) => <MetricTile key={metric.label} {...metric} />)}</section>
+          <section className="metricGrid" aria-label="销售指标">{dashboardMetrics.map((metric) => <MetricTile key={metric.label} {...metric} />)}</section>
           <ProductLineSetup productLines={productLines} loading={loadingProductLines} creating={creatingProductLine} onCreate={createProductLineFromForm} />
           <CustomerAgent
             productLines={productLines}
