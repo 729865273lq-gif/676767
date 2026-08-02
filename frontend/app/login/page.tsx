@@ -17,7 +17,7 @@ async function requestJson<T>(url: string, init: RequestInit): Promise<T> {
       "detail" in data &&
       typeof data.detail === "string"
         ? data.detail
-        : "Authentication failed";
+        : "认证失败";
     throw new Error(detail);
   }
   return data as T;
@@ -52,22 +52,22 @@ export default function LoginPage() {
       );
       saveSession({ ...authSession, organization_role: membership.role });
       window.location.assign("/");
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Authentication failed"); }
+    } catch (error) { setMessage(error instanceof Error ? error.message : "认证失败"); }
     finally { setPending(false); }
   }
 
   return <main style={{ maxWidth: 440, margin: "64px auto", padding: 24, fontFamily: "Arial, sans-serif" }}>
     <p style={{ color: "#0b7285", fontWeight: 700 }}>TRADE AXIS</p>
-    <h1>{registering ? "Create workspace" : "Sign in"}</h1>
+    <h1>{registering ? "创建工作区" : "登录"}</h1>
     <form onSubmit={submit} style={{ display: "grid", gap: 14 }}>
-      {registering && <><label>Organization<input name="organization" required style={{ width: "100%" }} /></label><label>Name<input name="name" required style={{ width: "100%" }} /></label></>}
-      <label>Email<input name="email" type="email" required style={{ width: "100%" }} /></label>
-      <label>Password<input name="password" type="password" minLength={12} required style={{ width: "100%" }} /></label>
+      {registering && <><label>组织名称<input name="organization" required style={{ width: "100%" }} /></label><label>姓名<input name="name" required style={{ width: "100%" }} /></label></>}
+      <label>邮箱<input name="email" type="email" required style={{ width: "100%" }} /></label>
+      <label>密码<input name="password" type="password" minLength={12} required style={{ width: "100%" }} /></label>
       {message && <p role="alert" style={{ color: "#c92a2a" }}>{message}</p>}
-      <button type="submit" disabled={pending}>{pending ? "Please wait..." : registering ? "Create account" : "Sign in"}</button>
+      <button type="submit" disabled={pending}>{pending ? "请稍候..." : registering ? "创建账号" : "登录"}</button>
     </form>
     <button type="button" onClick={() => { setRegistering(!registering); setMessage(""); }} style={{ marginTop: 18 }}>
-      {registering ? "Already have an account? Sign in" : "New here? Create workspace"}
+      {registering ? "已有账号？去登录" : "第一次使用？创建工作区"}
     </button>
   </main>;
 }

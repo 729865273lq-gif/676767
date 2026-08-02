@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.platform.models import utcnow
@@ -15,6 +15,22 @@ class LeadBucket(StrEnum):
     PRIORITY_RECOMMENDATION = "priority_recommendation"
     NEEDS_ENRICHMENT = "needs_enrichment"
     NOT_QUALIFIED = "not_qualified"
+
+
+class LeadStatus(StrEnum):
+    NEW = "new"
+    TO_CONTACT = "to_contact"
+    CONTACTED = "contacted"
+    INTERESTED = "interested"
+    QUOTING = "quoting"
+    WON = "won"
+    NOT_FIT = "not_fit"
+
+
+class EmailDraftStatus(StrEnum):
+    PENDING_APPROVAL = "pending_approval"
+    READY_TO_SEND = "ready_to_send"
+    REJECTED = "rejected"
 
 
 class Lead(Base):
@@ -40,6 +56,15 @@ class Lead(Base):
     bucket: Mapped[LeadBucket] = mapped_column(
         Enum(LeadBucket, native_enum=False, length=30), nullable=False
     )
+    status: Mapped[LeadStatus] = mapped_column(
+        Enum(LeadStatus, native_enum=False, length=30),
+        default=LeadStatus.NEW,
+        nullable=False,
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    notes: Mapped[str] = mapped_column(String(4_000), default="", nullable=False)
     reasons: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     missing_signals: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
@@ -59,3 +84,81 @@ class LeadEvidence(Base):
     source_excerpt: Mapped[str] = mapped_column(String(4_000), nullable=False)
     signal_name: Mapped[str] = mapped_column(String(100), nullable=False)
     captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class FollowUpRecord(Base):
+    __tablename__ = "follow_up_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    lead_id: Mapped[str] = mapped_column(
+        ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    actor_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    activity_type: Mapped[str] = mapped_column(String(50), default="note", nullable=False)
+    content: Mapped[str] = mapped_column(String(4_000), nullable=False)
+    next_follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class CRMContact(Base):
+    __tablename__ = "crm_contacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    lead_id: Mapped[str] = mapped_column(
+        ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    email: Mapped[str] = mapped_column(String(320), default="", nullable=False)
+    phone: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    linkedin_url: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
+    whatsapp: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class EmailDraft(Base):
+    __tablename__ = "email_drafts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    lead_id: Mapped[str] = mapped_column(
+        ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    contact_id: Mapped[str] = mapped_column(
+        ForeignKey("crm_contacts.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product_line_id: Mapped[str] = mapped_column(
+        ForeignKey("product_lines.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    reviewed_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    status: Mapped[EmailDraftStatus] = mapped_column(
+        Enum(EmailDraftStatus, native_enum=False, length=30),
+        default=EmailDraftStatus.PENDING_APPROVAL,
+        nullable=False,
+        index=True,
+    )
+    subject: Mapped[str] = mapped_column(String(300), nullable=False)
+    body: Mapped[str] = mapped_column(String(8_000), nullable=False)
+    evidence_snapshot: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list, nullable=False)
+    rejection_reason: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

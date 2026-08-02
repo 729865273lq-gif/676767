@@ -41,7 +41,7 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
       }),
     });
   });
-  await page.route(/\/discovery\/organizations\/org-1\/leads\?workflow_run_id=run-1$/, async (route) => {
+  await page.route(/\/discovery\/organizations\/org-1\/leads$/, async (route) => {
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify([
@@ -55,6 +55,9 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
           buyer_profile: "Distributor",
           score: 80,
           bucket: "needs_enrichment",
+          status: "new",
+          owner_user_id: null,
+          notes: "",
           reasons: ["product or business fit evidence recorded"],
           missing_signals: ["decision-maker identification attempt"],
           evidence: [
@@ -75,6 +78,9 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
           buyer_profile: "Project buyer",
           score: 92,
           bucket: "priority_recommendation",
+          status: "new",
+          owner_user_id: null,
+          notes: "",
           reasons: ["verified website", "usable contact channel"],
           missing_signals: [],
           evidence: [
@@ -88,23 +94,27 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
       ]),
     });
   });
+  await page.route(/\/discovery\/organizations\/org-1\/email-drafts$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "Sales command center" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Customer Agent" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "外贸客户开发工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "客户搜索 Agent" })).toBeVisible();
 
-  await page.getByLabel("Discovery product line").selectOption("product-1");
-  await page.getByLabel("Discovery target market").fill("Germany");
-  await page.getByLabel("Discovery buyer profile").selectOption("Distributor");
-  await page.getByRole("button", { name: "Start discovery" }).click();
+  await page.getByLabel("搜索产品线").selectOption("product-1");
+  await page.getByLabel("搜索目标市场").fill("Germany");
+  await page.getByLabel("搜索客户类型").selectOption("Distributor");
+  await page.getByRole("button", { name: "开始搜索客户" }).click();
 
-  await expect(page.getByText("Discovery complete")).toBeVisible();
-  await expect(page.getByRole("cell", { name: "LumenHaus GmbH" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Show priority leads" })).toBeVisible();
+  await expect(page.getByText("搜索完成")).toBeVisible();
+  await expect(page.locator("tbody").getByText("LumenHaus GmbH")).toBeVisible();
+  await expect(page.getByRole("button", { name: "只看优先客户" })).toBeVisible();
 
-  await page.getByRole("button", { name: "Show priority leads" }).click();
-  await expect(page.getByRole("cell", { name: "LumenHaus GmbH" })).toHaveCount(0);
+  await page.getByRole("button", { name: "只看优先客户" }).click();
+  await expect(page.locator("tbody").getByText("LumenHaus GmbH")).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Review 8 drafts" }).click();
-  await expect(page.getByText("Email review queue")).toBeVisible();
+  await page.getByRole("button", { name: "审核 0 封草稿" }).click();
+  await expect(page.getByText("邮件审核队列")).toBeVisible();
+  await expect(page.getByText("暂无待审核草稿")).toBeVisible();
 });

@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.main import create_app
-from app.crm.models import Lead, LeadBucket, LeadEvidence
+from app.crm.models import CRMContact, EmailDraftStatus, Lead, LeadBucket, LeadEvidence, LeadStatus
 from app.platform.models import ConnectorCredential, MembershipRole, Organization, ProductLine, User, UserMembership
 from app.shared.config import Settings
 from app.shared.db import Base
@@ -258,6 +258,194 @@ def test_discovery_lead_routes_return_evidence_only_within_the_organization() ->
     assert response.json()[0]["bucket"] == "needs_enrichment"
     assert detail.json()["evidence"][0]["source_excerpt"] == "Commercial lighting distributor"
     assert cross_tenant.status_code == 403
+
+
+def test_manual_customer_routes_create_and_delete_within_the_organization() -> None:
+    client, _ = configured_client()
+    with client.app.state.session_factory.begin() as session:
+        product_line = ProductLine(organization_id=client.acme_id, name="Lighting")  # type: ignore[attr-defined]
+        session.add(product_line)
+        session.flush()
+        product_line_id = product_line.id
+
+    payload = {
+        "product_line_id": product_line_id,
+        "company_name": "Manual Import GmbH",
+        "website": "manual-import.example",
+        "target_market": "Germany",
+        "buyer_profile": "Distributor",
+        "notes": "Met at Canton Fair and requested a catalog.",
+    }
+    created = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json=payload,
+    )
+    duplicate = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json=payload,
+    )
+    cross_tenant = client.post(
+        f"/discovery/organizations/{client.globex_id}/leads",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json=payload,
+    )
+    lead_id = created.json()["id"]
+    deleted = client.delete(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    missing_after_delete = client.get(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert created.status_code == 201
+    assert created.json()["website"] == "https://manual-import.example"
+    assert created.json()["bucket"] == "needs_enrichment"
+    assert created.json()["status"] == "to_contact"
+    assert created.json()["evidence"][0]["signal_name"] == "manual_entry"
+    assert duplicate.status_code == 409
+    assert cross_tenant.status_code == 403
+    assert deleted.status_code == 204
+    assert missing_after_delete.status_code == 404
+
+
+def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
+    client, factory = configured_client()
+    with factory.begin() as session:
+        product_line = ProductLine(organization_id=client.acme_id, name="Lighting")  # type: ignore[attr-defined]
+        session.add(product_line)
+        session.flush()
+        workflow_run = WorkflowRun(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            agent_id="manual_crm",
+            agent_version="1.0.0",
+            input_json={},
+            idempotency_key="customer-detail-route-run",
+        )
+        session.add(workflow_run)
+        session.flush()
+        lead = Lead(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            workflow_run_id=workflow_run.id,
+            product_line_id=product_line.id,
+            company_name="Follow Up GmbH",
+            website="https://follow-up.example",
+            canonical_domain="follow-up.example",
+            target_market="Germany",
+            buyer_profile="distributor",
+            score=70,
+            bucket=LeadBucket.NEEDS_ENRICHMENT,
+            reasons=["人工添加客户"],
+            missing_signals=["联系人待补充"],
+        )
+        session.add(lead)
+        session.flush()
+        lead_id = lead.id
+
+    updated = client.patch(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={
+            "status": "interested",
+            "notes": "Needs FOB quote for 500 units.",
+            "owner_user_id": None,
+        },
+    )
+    contact = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/contacts",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={
+            "name": "Anna Weber",
+            "title": "Purchasing Manager",
+            "email": "anna@follow-up.example",
+            "phone": "+49 30 123456",
+            "linkedin_url": "https://linkedin.com/in/anna-weber",
+            "whatsapp": "+49 171 123456",
+            "is_primary": True,
+        },
+    )
+    email_draft = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/email-drafts",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={"contact_id": contact.json()["id"]},
+    )
+    email_draft_id = email_draft.json()["id"]
+    listed_drafts = client.get(
+        f"/discovery/organizations/{client.acme_id}/email-drafts",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    edited_draft = client.patch(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{email_draft_id}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={
+            "subject": "Edited subject",
+            "body": "Edited body with reviewer changes.",
+        },
+    )
+    approved_draft = client.post(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{email_draft_id}/review",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
+        json={"action": "approve"},
+    )
+    follow_up = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/follow-ups",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={
+            "activity_type": "email",
+            "content": "Sent catalog and asked for target quantity.",
+            "next_follow_up_at": "2026-08-03T09:00:00Z",
+        },
+    )
+    detail = client.get(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/detail",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    cross_tenant = client.get(
+        f"/discovery/organizations/{client.globex_id}/leads/{lead_id}/detail",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["status"] == LeadStatus.INTERESTED
+    assert updated.json()["notes"] == "Needs FOB quote for 500 units."
+    assert contact.status_code == 201
+    assert contact.json()["name"] == "Anna Weber"
+    assert contact.json()["is_primary"] is True
+    assert email_draft.status_code == 201
+    assert email_draft.json()["status"] == EmailDraftStatus.PENDING_APPROVAL
+    assert email_draft.json()["contact_email"] == "anna@follow-up.example"
+    assert "Follow Up GmbH" in email_draft.json()["body"]
+    assert listed_drafts.status_code == 200
+    assert listed_drafts.json()[0]["id"] == email_draft_id
+    assert edited_draft.status_code == 200
+    assert edited_draft.json()["subject"] == "Edited subject"
+    assert approved_draft.status_code == 200
+    assert approved_draft.json()["status"] == EmailDraftStatus.READY_TO_SEND
+    assert approved_draft.json()["reviewed_by_user_id"] == client.admin_id  # type: ignore[attr-defined]
+    assert follow_up.status_code == 201
+    assert detail.status_code == 200
+    assert detail.json()["contacts"][0]["email"] == "anna@follow-up.example"
+    assert detail.json()["follow_ups"][0]["activity_type"] == "email"
+    assert detail.json()["follow_ups"][0]["content"] == "Sent catalog and asked for target quantity."
+    assert cross_tenant.status_code == 403
+
+    deleted_contact = client.delete(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/contacts/{contact.json()['id']}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    detail_after_delete = client.get(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/detail",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    with factory() as session:
+        deleted = session.get(CRMContact, contact.json()["id"])
+
+    assert deleted_contact.status_code == 204
+    assert detail_after_delete.json()["contacts"] == []
+    assert deleted is None
 
 
 def test_register_creates_admin_and_login_issues_a_bearer_token() -> None:

@@ -3,29 +3,65 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
+  createContact,
+  createEmailDraft,
+  createFollowUp,
   createProductLine,
+  createManualLead,
+  deleteContact,
+  deleteLead,
+  getLeadDetail,
+  listEmailDrafts,
   listLeads,
   listProductLines,
+  reviewEmailDraft,
   startDiscovery,
+  updateEmailDraft,
+  updateLeadDetail,
+  type ContactRecord,
+  type EmailDraft,
+  type FollowUpRecord,
   type Lead,
+  type LeadDetail,
+  type LeadStatus,
   type ProductLine,
 } from "../lib/api";
 import { clearSession, readSession, type Session } from "../lib/auth";
 
 const metrics = [
-  { label: "New leads", value: "36", note: "API-backed discovery ready", tone: "blue" },
-  { label: "Priority leads", value: "18", note: "Evidence gate enabled", tone: "cyan" },
-  { label: "Drafts to review", value: "8", note: "Email approval stays human-led", tone: "orange" },
-  { label: "Positive replies", value: "6", note: "Reply loop coming next", tone: "green" },
+  { label: "新增线索", value: "36", note: "已接入 API 搜索", tone: "blue" },
+  { label: "优先客户", value: "18", note: "已启用证据评分", tone: "cyan" },
+  { label: "待审核邮件", value: "8", note: "邮件坚持人工审批", tone: "orange" },
+  { label: "积极回复", value: "6", note: "回复跟进下一步接入", tone: "green" },
 ];
 
-const navItems = ["Overview", "Customer Agent", "CRM", "Email review", "Inbox", "Knowledge base"];
+const navItems = ["总览", "客户搜索 Agent", "CRM", "邮件审核", "收件箱", "知识库"];
 
 const bucketLabel = {
-  priority_recommendation: "Priority",
-  needs_enrichment: "Needs enrichment",
-  not_qualified: "Not qualified",
+  priority_recommendation: "优先推荐",
+  needs_enrichment: "待补充信息",
+  not_qualified: "暂不合格",
 } as const;
+
+const leadStatusLabel: Record<LeadStatus, string> = {
+  new: "新客户",
+  to_contact: "待联系",
+  contacted: "已联系",
+  interested: "有意向",
+  quoting: "报价中",
+  won: "已成交",
+  not_fit: "暂不合适",
+};
+
+const emailDraftStatusLabel: Record<EmailDraft["status"], string> = {
+  pending_approval: "待审批",
+  ready_to_send: "待发送",
+  rejected: "已驳回",
+};
+
+function isCrmLead(lead: Lead) {
+  return lead.status !== "new";
+}
 
 function parseCsv(value: FormDataEntryValue | null) {
   return String(value ?? "")
@@ -72,48 +108,48 @@ function ProductLineSetup({
     <section className="productPanel" aria-labelledby="product-lines-title">
       <div className="sectionHeader">
         <div>
-          <p className="sectionLabel">Product intelligence</p>
-          <h2 id="product-lines-title">Product lines</h2>
+          <p className="sectionLabel">产品情报</p>
+          <h2 id="product-lines-title">产品线</h2>
         </div>
-        <span className="countBadge">{loading ? "Loading" : `${productLines.length} configured`}</span>
+        <span className="countBadge">{loading ? "加载中" : `已配置 ${productLines.length} 个`}</span>
       </div>
       <div className="productContent">
         <form className="productForm" onSubmit={onCreate}>
           <label>
-            Product line name
-            <input name="name" required placeholder="Industrial LED lighting" />
+            产品线名称
+            <input name="name" required placeholder="工业 LED 照明" />
           </label>
           <label>
-            Product keywords
-            <input name="keywords" required placeholder="LED floodlight, warehouse lighting" />
+            产品关键词
+            <input name="keywords" required placeholder="LED 投光灯, 仓库照明" />
           </label>
           <label>
-            Buyer profiles
-            <input name="buyer_profiles" required placeholder="Distributor, Project buyer" />
+            客户类型
+            <input name="buyer_profiles" required placeholder="经销商, 工程采购商" />
           </label>
           <label>
-            Target regions
-            <input name="target_regions" required placeholder="Europe, North America" />
+            目标区域
+            <input name="target_regions" required placeholder="欧洲, 北美" />
           </label>
           <label className="wideField">
-            Description
-            <input name="description" placeholder="Commercial and industrial retrofit lighting" />
+            产品描述
+            <input name="description" placeholder="商业与工业改造照明方案" />
           </label>
           <button className="primaryButton" type="submit" disabled={creating}>
-            {creating ? "Creating..." : "Create product line"}
+            {creating ? "创建中..." : "创建产品线"}
           </button>
         </form>
-        <div className="productList" aria-label="Configured product lines">
+        <div className="productList" aria-label="已配置产品线">
           {productLines.length === 0 ? (
-            <div className="emptyState">Create the first product line before starting discovery.</div>
+            <div className="emptyState">请先创建第一个产品线，再开始客户搜索。</div>
           ) : (
             productLines.map((productLine) => (
               <article className="productItem" key={productLine.id}>
                 <strong>{productLine.name}</strong>
-                <span>{productLine.product_keywords.join(", ") || "No keywords"}</span>
+                <span>{productLine.product_keywords.join(", ") || "暂无关键词"}</span>
                 <small>
-                  {productLine.buyer_profiles.join(", ") || "No buyer profiles"} /{" "}
-                  {productLine.target_regions.join(", ") || "No target regions"}
+                  {productLine.buyer_profiles.join(", ") || "暂无客户类型"} /{" "}
+                  {productLine.target_regions.join(", ") || "暂无目标区域"}
                 </small>
               </article>
             ))
@@ -154,32 +190,32 @@ function CustomerAgent({
     <section className="agentPanel" aria-labelledby="customer-agent-title">
       <div className="agentIntro">
         <p className="sectionLabel">Agent 01</p>
-        <h2 id="customer-agent-title">Customer Agent</h2>
-        <p>Search, verify, score and prepare a focused set of companies for sales outreach.</p>
-        <div className="agentChecks" aria-label="Discovery checks">
-          <span>Website verified</span><span>Business evidence</span><span>Contact attempt</span>
+        <h2 id="customer-agent-title">客户搜索 Agent</h2>
+        <p>按产品、国家和客户类型搜索公司，保留公开证据并给出优先级评分。</p>
+        <div className="agentChecks" aria-label="搜索检查项">
+          <span>网站已核验</span><span>业务证据</span><span>联系线索</span>
         </div>
       </div>
       <form className="agentForm" onSubmit={onRun}>
         <label>
-          Product line
+          产品线
           <select
-            aria-label="Discovery product line"
+            aria-label="搜索产品线"
             name="product_line_id"
             required
             value={selectedProductLineId}
             onChange={(event) => onProductLineChange(event.target.value)}
           >
-            <option value="">Select product line</option>
+            <option value="">选择产品线</option>
             {productLines.map((productLine) => (
               <option key={productLine.id} value={productLine.id}>{productLine.name}</option>
             ))}
           </select>
         </label>
         <label>
-          Target market
+          目标市场
           <input
-            aria-label="Discovery target market"
+            aria-label="搜索目标市场"
             name="target_market"
             required
             value={targetMarket}
@@ -187,23 +223,23 @@ function CustomerAgent({
           />
         </label>
         <label>
-          Buyer profile
+          客户类型
           <select
-            aria-label="Discovery buyer profile"
+            aria-label="搜索客户类型"
             name="buyer_profile"
             value={buyerProfile}
             onChange={(event) => onBuyerProfileChange(event.target.value)}
           >
-            <option value="">Any buyer profile</option>
+            <option value="">不限客户类型</option>
             {buyerProfiles.map((profile) => (
               <option key={profile} value={profile}>{profile}</option>
             ))}
           </select>
         </label>
         <button className="primaryButton" type="submit" disabled={running || !selectedProductLineId}>
-          {running ? "Building lead list..." : "Start discovery"}
+          {running ? "正在生成客户列表..." : "开始搜索客户"}
         </button>
-        <div className={`runStatus ${runMessage.includes("complete") ? "runComplete" : ""}`} aria-live="polite">
+        <div className={`runStatus ${runMessage.includes("完成") ? "runComplete" : ""}`} aria-live="polite">
           <span className="statusDot" aria-hidden="true" />
           {runMessage}
         </div>
@@ -212,53 +248,116 @@ function CustomerAgent({
   );
 }
 
-function LeadTable({ leads, priorityOnly, onPriorityToggle }: { leads: Lead[]; priorityOnly: boolean; onPriorityToggle: () => void }) {
+function LeadTable({
+  leads,
+  priorityOnly,
+  selectedLeadIds,
+  savingToCrm,
+  onPriorityToggle,
+  onSelectLead,
+  onSelectAllVisible,
+  onSaveToCrm,
+  onOpenDetail,
+}: {
+  leads: Lead[];
+  priorityOnly: boolean;
+  selectedLeadIds: string[];
+  savingToCrm: boolean;
+  onPriorityToggle: () => void;
+  onSelectLead: (leadId: string, selected: boolean) => void;
+  onSelectAllVisible: (leadIds: string[], selected: boolean) => void;
+  onSaveToCrm: () => void;
+  onOpenDetail: (leadId: string) => void;
+}) {
   const displayedLeads = priorityOnly
     ? leads.filter((lead) => lead.bucket === "priority_recommendation")
     : leads;
+  const selectableLeadIds = displayedLeads
+    .filter((lead) => !isCrmLead(lead))
+    .map((lead) => lead.id);
+  const selectedVisibleIds = selectableLeadIds.filter((leadId) => selectedLeadIds.includes(leadId));
+  const allVisibleSelected =
+    selectableLeadIds.length > 0 && selectedVisibleIds.length === selectableLeadIds.length;
 
   return (
     <section className="dataSection" aria-labelledby="lead-results-title">
       <div className="sectionHeader">
         <div>
-          <p className="sectionLabel">Customer Agent output</p>
-          <h2 id="lead-results-title">Discovered companies</h2>
+          <p className="sectionLabel">客户搜索 Agent 输出</p>
+          <h2 id="lead-results-title">已发现公司</h2>
         </div>
         <div className="tableActions">
           <button className="textButton" type="button" onClick={onPriorityToggle}>
-            {priorityOnly ? "Show all leads" : "Show priority leads"}
+            {priorityOnly ? "显示全部线索" : "只看优先客户"}
           </button>
-          <button className="outlineButton" type="button" disabled>Save to CRM</button>
+          <button
+            className="outlineButton"
+            type="button"
+            disabled={savingToCrm || selectedLeadIds.length === 0}
+            onClick={onSaveToCrm}
+          >
+            {savingToCrm
+              ? "保存中..."
+              : selectedLeadIds.length > 0
+                ? `保存 ${selectedLeadIds.length} 个到 CRM`
+                : "保存到 CRM"}
+          </button>
         </div>
       </div>
       <div className="tableWrap">
         {leads.length === 0 ? (
-          <div className="emptyState tableEmpty">Run discovery to populate evidence-backed leads.</div>
+          <div className="emptyState tableEmpty">运行客户搜索后，这里会显示带证据的客户线索。</div>
         ) : (
           <table>
             <thead>
               <tr>
-                <th scope="col">Company</th>
-                <th scope="col">Market / profile</th>
-                <th scope="col">Evidence</th>
-                <th scope="col">Reasons</th>
-                <th scope="col">Score</th>
-                <th scope="col">Bucket</th>
+                <th scope="col" className="selectColumn">
+                  <input
+                    type="checkbox"
+                    aria-label="选择全部未入库线索"
+                    checked={allVisibleSelected}
+                    disabled={selectableLeadIds.length === 0}
+                    onChange={(event) => onSelectAllVisible(selectableLeadIds, event.currentTarget.checked)}
+                  />
+                </th>
+                <th scope="col">公司</th>
+                <th scope="col">市场 / 客户类型</th>
+                <th scope="col">证据</th>
+                <th scope="col">评分原因</th>
+                <th scope="col">分数</th>
+                <th scope="col">分组</th>
+                <th scope="col">CRM 状态</th>
+                <th scope="col">操作</th>
               </tr>
             </thead>
             <tbody>
               {displayedLeads.map((lead) => (
                 <tr key={lead.id}>
+                  <td className="selectColumn">
+                    <input
+                      type="checkbox"
+                      aria-label={`选择 ${lead.company_name}`}
+                      checked={selectedLeadIds.includes(lead.id)}
+                      disabled={isCrmLead(lead)}
+                      onChange={(event) => onSelectLead(lead.id, event.currentTarget.checked)}
+                    />
+                  </td>
                   <td><strong>{lead.company_name}</strong><span>{lead.website}</span></td>
-                  <td><strong className="contactName">{lead.target_market}</strong><span>{lead.buyer_profile ?? "Any profile"}</span></td>
+                  <td><strong className="contactName">{lead.target_market}</strong><span>{lead.buyer_profile ?? "不限类型"}</span></td>
                   <td className="evidence">
-                    {lead.evidence.length > 0 ? lead.evidence[0].source_excerpt : "No source excerpt recorded"}
+                    {lead.evidence.length > 0 ? lead.evidence[0].source_excerpt : "暂无来源摘要"}
                   </td>
                   <td className="evidence">
-                    {lead.reasons.join("; ") || lead.missing_signals.join("; ") || "No scoring details"}
+                    {lead.reasons.join("; ") || lead.missing_signals.join("; ") || "暂无评分细节"}
                   </td>
                   <td><span className={scoreClass(lead.score)}>{lead.score}</span></td>
                   <td><span className={bucketClass(lead.bucket)}>{bucketLabel[lead.bucket]}</span></td>
+                  <td><span className={isCrmLead(lead) ? "status statusQualified" : "status statusNew"}>{leadStatusLabel[lead.status]}</span></td>
+                  <td>
+                    <button className="textButton" type="button" onClick={() => onOpenDetail(lead.id)}>
+                      查看详情
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -269,27 +368,148 @@ function LeadTable({ leads, priorityOnly, onPriorityToggle }: { leads: Lead[]; p
   );
 }
 
-function ReviewQueue({ onOpen }: { onOpen: () => void }) {
+function CRMCustomerManager({
+  leads,
+  productLines,
+  selectedProductLineId,
+  creating,
+  deletingLeadId,
+  onCreate,
+  onDelete,
+  onOpenDetail,
+}: {
+  leads: Lead[];
+  productLines: ProductLine[];
+  selectedProductLineId: string;
+  creating: boolean;
+  deletingLeadId: string;
+  onCreate: (event: FormEvent<HTMLFormElement>) => void;
+  onDelete: (leadId: string) => void;
+  onOpenDetail: (leadId: string) => void;
+}) {
+  const crmLeads = leads.filter(isCrmLead).slice(0, 6);
+
+  return (
+    <section className="crmPanel" aria-labelledby="crm-customers-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="sectionLabel">CRM 客户管理</p>
+          <h2 id="crm-customers-title">CRM 客户</h2>
+        </div>
+        <span className="countBadge">{crmLeads.length} 个客户</span>
+      </div>
+      <div className="crmContent">
+        <form className="crmForm" onSubmit={onCreate}>
+          <label>
+            所属产品线
+            <select
+              key={selectedProductLineId || "manual-product-line"}
+              name="product_line_id"
+              required
+              defaultValue={selectedProductLineId}
+            >
+              <option value="">选择产品线</option>
+              {productLines.map((productLine) => (
+                <option key={productLine.id} value={productLine.id}>{productLine.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            公司名称
+            <input name="company_name" required placeholder="例如：Berlin Lighting GmbH" />
+          </label>
+          <label>
+            官网
+            <input name="website" required placeholder="example.com 或 https://example.com" />
+          </label>
+          <label>
+            目标市场
+            <input name="target_market" required placeholder="德国、美国、日本" />
+          </label>
+          <label>
+            客户类型
+            <input name="buyer_profile" placeholder="经销商、进口商、工程采购商" />
+          </label>
+          <label className="wideField">
+            备注 / 来源
+            <input name="notes" placeholder="例如：展会沟通、老客户介绍、名片来源" />
+          </label>
+          <button className="primaryButton" type="submit" disabled={creating || productLines.length === 0}>
+            {creating ? "添加中..." : "添加客户"}
+          </button>
+        </form>
+        <div className="crmList" aria-label="CRM 客户列表">
+          {crmLeads.length === 0 ? (
+            <div className="emptyState">暂无 CRM 客户。你可以手动添加客户，或从搜索结果勾选线索保存到 CRM。</div>
+          ) : (
+            crmLeads.map((lead) => (
+              <article className="crmItem" key={lead.id}>
+                <div>
+                  <strong>{lead.company_name}</strong>
+                  <span>{lead.website}</span>
+                  <small>{lead.target_market} / {lead.buyer_profile ?? "不限类型"} / {leadStatusLabel[lead.status]}</small>
+                </div>
+                <button
+                  className="textButton"
+                  type="button"
+                  onClick={() => onOpenDetail(lead.id)}
+                >
+                  详情
+                </button>
+                <button
+                  className="dangerTextButton"
+                  type="button"
+                  disabled={deletingLeadId === lead.id}
+                  onClick={() => onDelete(lead.id)}
+                >
+                  {deletingLeadId === lead.id ? "删除中..." : "删除"}
+                </button>
+              </article>
+            ))
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ReviewQueue({
+  drafts,
+  loading,
+  onOpen,
+  onOpenDraft,
+}: {
+  drafts: EmailDraft[];
+  loading: boolean;
+  onOpen: () => void;
+  onOpenDraft: (draftId: string) => void;
+}) {
+  const pendingCount = drafts.filter((draft) => draft.status === "pending_approval").length;
   return (
     <section className="reviewPanel" aria-labelledby="review-title">
       <div className="sectionHeader compact">
         <div>
-          <p className="sectionLabel">Human approval</p>
-          <h2 id="review-title">Outbound review</h2>
+          <p className="sectionLabel">人工审批</p>
+          <h2 id="review-title">开发信审核</h2>
         </div>
-        <button className="textButton" type="button" onClick={onOpen}>Review 8 drafts</button>
+        <button className="textButton" type="button" onClick={onOpen}>
+          审核 {pendingCount} 封草稿
+        </button>
       </div>
-      <div className="reviewItem">
-        <div className="avatar blueAvatar">LW</div>
-        <div><strong>LumenHaus GmbH</strong><span>Personalized in German</span></div>
-        <span className="qualityMark">96</span>
-      </div>
-      <div className="reviewItem">
-        <div className="avatar cyanAvatar">RI</div>
-        <div><strong>Rheinland Industriebedarf</strong><span>Product evidence cited</span></div>
-        <span className="qualityMark">93</span>
-      </div>
-      <div className="reviewFooter"><span>Quality gate enabled</span><strong>8 drafts ready</strong></div>
+      {loading ? (
+        <div className="emptyState">正在加载审批队列...</div>
+      ) : drafts.length === 0 ? (
+        <div className="emptyState">暂无开发信草稿。先在客户详情页为联系人生成草稿。</div>
+      ) : (
+        drafts.slice(0, 2).map((draft) => (
+          <button className="reviewItem reviewButton" type="button" key={draft.id} onClick={() => onOpenDraft(draft.id)}>
+            <div className="avatar blueAvatar">{draft.contact_name.slice(0, 2).toUpperCase() || "EM"}</div>
+            <div><strong>{draft.lead_company_name}</strong><span>{draft.contact_name} / {emailDraftStatusLabel[draft.status]}</span></div>
+            <span className="qualityMark">{draft.evidence_snapshot.length}</span>
+          </button>
+        ))
+      )}
+      <div className="reviewFooter"><span>人工审批已启用</span><strong>{pendingCount} 封草稿待审</strong></div>
     </section>
   );
 }
@@ -299,57 +519,362 @@ function FollowUpTimeline() {
     <section className="timelinePanel" aria-labelledby="followup-title">
       <div className="sectionHeader compact">
         <div>
-          <p className="sectionLabel">Sales execution</p>
-          <h2 id="followup-title">Follow-up control</h2>
+          <p className="sectionLabel">销售执行</p>
+          <h2 id="followup-title">跟进控制</h2>
         </div>
-        <button className="iconTextButton" type="button">View CRM</button>
+        <button className="iconTextButton" type="button">查看 CRM</button>
       </div>
       <ol className="timeline">
-        <li><time>09:30</time><span className="timelineDot blueDot" /><div><strong>Reply needs review</strong><p>HelioTech AG asked for the 2026 catalog.</p></div></li>
-        <li><time>11:00</time><span className="timelineDot cyanDot" /><div><strong>Send approved introduction</strong><p>LumenHaus GmbH / owner: Mia Chen</p></div></li>
-        <li><time>Tomorrow</time><span className="timelineDot orangeDot" /><div><strong>Follow up on quotation</strong><p>Rheinland Industriebedarf / no reply in 4 days</p></div></li>
+        <li><time>09:30</time><span className="timelineDot blueDot" /><div><strong>回复待确认</strong><p>HelioTech AG 索要 2026 产品目录。</p></div></li>
+        <li><time>11:00</time><span className="timelineDot cyanDot" /><div><strong>发送已审批开发信</strong><p>LumenHaus GmbH / 负责人：Mia Chen</p></div></li>
+        <li><time>明天</time><span className="timelineDot orangeDot" /><div><strong>跟进报价</strong><p>Rheinland Industriebedarf / 4 天未回复</p></div></li>
       </ol>
     </section>
   );
 }
 
-function ReviewDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+function ReviewDrawer({
+  open,
+  draft,
+  saving,
+  reviewing,
+  onClose,
+  onSave,
+  onApprove,
+  onReject,
+}: {
+  open: boolean;
+  draft: EmailDraft | null;
+  saving: boolean;
+  reviewing: boolean;
+  onClose: () => void;
+  onSave: (event: FormEvent<HTMLFormElement>) => void;
+  onApprove: () => void;
+  onReject: (event: FormEvent<HTMLFormElement>) => void;
+}) {
   if (!open) return null;
 
   return (
     <div className="drawerBackdrop" role="presentation" onMouseDown={onClose}>
-      <aside className="reviewDrawer" aria-label="Email review queue" onMouseDown={(event) => event.stopPropagation()}>
+      <aside className="reviewDrawer" aria-label="邮件审核队列" onMouseDown={(event) => event.stopPropagation()}>
         <div className="drawerHeader">
-          <div><p className="sectionLabel">Email Agent</p><h2>Email review queue</h2></div>
-          <button className="closeButton" type="button" aria-label="Close review queue" onClick={onClose}>x</button>
+          <div><p className="sectionLabel">邮件 Agent</p><h2>邮件审核队列</h2></div>
+          <button className="closeButton" type="button" aria-label="关闭审核队列" onClick={onClose}>x</button>
         </div>
-        <p className="drawerCopy">Every draft passed language, product evidence, personalization and call-to-action checks before review.</p>
-        <article className="draftCard">
-          <span className="status statusPriority">Priority lead</span>
-          <h3>Lighting solutions for commercial retrofit projects</h3>
-          <p>To: Anna Weber / LumenHaus GmbH</p>
-          <div className="draftEvidence"><span>Product catalog cited</span><span>Project evidence cited</span></div>
-          <div className="drawerActions"><button className="outlineButton" type="button">Edit draft</button><button className="primaryButton" type="button">Approve to send</button></div>
-        </article>
-        <button className="queueNext" type="button">Next draft <span>2 of 8</span></button>
+        <p className="drawerCopy">每封开发信必须人工查看、修改并审批。批准后只进入“待发送”，不会自动发出。</p>
+        {!draft ? (
+          <div className="emptyState drawerLoading">暂无待审核草稿。请先在客户详情页选择联系人生成开发信。</div>
+        ) : (
+          <>
+            <article className="draftCard">
+              <span className={draft.status === "ready_to_send" ? "status statusQualified" : "status statusPriority"}>
+                {emailDraftStatusLabel[draft.status]}
+              </span>
+              <h3>{draft.lead_company_name}</h3>
+              <p>To: {draft.contact_name} / {draft.contact_email}</p>
+              <div className="draftEvidence">
+                {draft.evidence_snapshot.length === 0 ? (
+                  <span>暂无证据快照</span>
+                ) : (
+                  draft.evidence_snapshot.map((item) => <span key={`${item.signal_name}-${item.source_url}`}>{item.signal_name}</span>)
+                )}
+              </div>
+            </article>
+            <form className="draftEditForm" onSubmit={onSave} key={`draft-${draft.id}`}>
+              <label>
+                邮件主题
+                <input name="subject" defaultValue={draft.subject} disabled={draft.status !== "pending_approval"} />
+              </label>
+              <label>
+                邮件正文
+                <textarea name="body" defaultValue={draft.body} disabled={draft.status !== "pending_approval"} />
+              </label>
+              <div className="drawerActions">
+                <button className="outlineButton" type="submit" disabled={saving || draft.status !== "pending_approval"}>
+                  {saving ? "保存中..." : "保存修改"}
+                </button>
+                <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "pending_approval"} onClick={onApprove}>
+                  {reviewing ? "审批中..." : "批准为待发送"}
+                </button>
+              </div>
+            </form>
+            <form className="rejectForm" onSubmit={onReject} key={`reject-${draft.id}`}>
+              <label>
+                驳回原因
+                <input name="rejection_reason" defaultValue={draft.rejection_reason} placeholder="例如：需要补充客户采购场景后再发送" disabled={draft.status !== "pending_approval"} />
+              </label>
+              <button className="dangerTextButton" type="submit" disabled={reviewing || draft.status !== "pending_approval"}>
+                驳回草稿
+              </button>
+            </form>
+          </>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) return "未设置";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function CustomerDetailDrawer({
+  detail,
+  loading,
+  saving,
+  addingContact,
+  addingFollowUp,
+  deletingContactId,
+  generatingDraftContactId,
+  onClose,
+  onSave,
+  onAddContact,
+  onDeleteContact,
+  onCreateEmailDraft,
+  onAddFollowUp,
+}: {
+  detail: LeadDetail | null;
+  loading: boolean;
+  saving: boolean;
+  addingContact: boolean;
+  addingFollowUp: boolean;
+  deletingContactId: string;
+  generatingDraftContactId: string;
+  onClose: () => void;
+  onSave: (event: FormEvent<HTMLFormElement>) => void;
+  onAddContact: (event: FormEvent<HTMLFormElement>) => void;
+  onDeleteContact: (contactId: string) => void;
+  onCreateEmailDraft: (contactId: string) => void;
+  onAddFollowUp: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  if (!detail && !loading) return null;
+
+  return (
+    <div className="drawerBackdrop" role="presentation" onMouseDown={onClose}>
+      <aside className="customerDrawer" aria-label="客户详情" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="drawerHeader">
+          <div>
+            <p className="sectionLabel">客户详情</p>
+            <h2>{detail?.company_name ?? "正在加载客户..."}</h2>
+          </div>
+          <button className="closeButton" type="button" aria-label="关闭客户详情" onClick={onClose}>x</button>
+        </div>
+        {loading || !detail ? (
+          <div className="emptyState drawerLoading">正在加载客户详情...</div>
+        ) : (
+          <div className="customerDetailContent">
+            <section className="detailSummary">
+              <div>
+                <span>官网</span>
+                <strong>{detail.website}</strong>
+              </div>
+              <div>
+                <span>市场 / 类型</span>
+                <strong>{detail.target_market} / {detail.buyer_profile ?? "不限类型"}</strong>
+              </div>
+              <div>
+                <span>状态</span>
+                <strong>{leadStatusLabel[detail.status]}</strong>
+              </div>
+              <div>
+                <span>评分</span>
+                <strong>{detail.score}</strong>
+              </div>
+            </section>
+
+            <form className="detailForm" onSubmit={onSave} key={`detail-${detail.id}`}>
+              <label>
+                客户状态
+                <select name="status" defaultValue={detail.status}>
+                  {Object.entries(leadStatusLabel).map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="wideField">
+                客户备注
+                <textarea name="notes" defaultValue={detail.notes} placeholder="记录客户需求、背景、报价偏好等信息" />
+              </label>
+              <button className="primaryButton" type="submit" disabled={saving}>
+                {saving ? "保存中..." : "保存客户详情"}
+              </button>
+            </form>
+
+            <section className="detailBlock">
+              <h3>联系人</h3>
+              {detail.contacts.length === 0 ? (
+                <p className="mutedCopy">暂无联系人。添加主要联系人后，后续邮件和跟进可以绑定到具体的人。</p>
+              ) : (
+                <ul className="contactList">
+                  {detail.contacts.map((contact: ContactRecord) => (
+                    <li key={contact.id}>
+                      <div>
+                        <strong>{contact.name}</strong>
+                        {contact.is_primary && <span className="primaryBadge">主要联系人</span>}
+                      </div>
+                      <p>{contact.title || "未填写职位"}</p>
+                      <small>{contact.email || "未填写邮箱"} / {contact.phone || "未填写电话"}</small>
+                      {(contact.linkedin_url || contact.whatsapp) && (
+                        <small>{contact.linkedin_url || "未填写 LinkedIn"} / {contact.whatsapp || "未填写 WhatsApp"}</small>
+                      )}
+                      <button
+                        className="textButton"
+                        type="button"
+                        disabled={!contact.email || generatingDraftContactId === contact.id}
+                        onClick={() => onCreateEmailDraft(contact.id)}
+                      >
+                        {generatingDraftContactId === contact.id ? "生成中..." : "生成开发信草稿"}
+                      </button>
+                      <button
+                        className="dangerTextButton"
+                        type="button"
+                        disabled={deletingContactId === contact.id}
+                        onClick={() => onDeleteContact(contact.id)}
+                      >
+                        {deletingContactId === contact.id ? "删除中..." : "删除联系人"}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <form className="contactForm" onSubmit={onAddContact} key={`contact-${detail.id}-${detail.contacts.length}`}>
+              <h3>新增联系人</h3>
+              <label>
+                姓名
+                <input name="name" required placeholder="例如：Anna Weber" />
+              </label>
+              <label>
+                职位
+                <input name="title" placeholder="采购经理 / Founder / Sales Director" />
+              </label>
+              <label>
+                邮箱
+                <input name="email" type="email" placeholder="anna@example.com" />
+              </label>
+              <label>
+                电话
+                <input name="phone" placeholder="+49 ..." />
+              </label>
+              <label>
+                LinkedIn
+                <input name="linkedin_url" placeholder="https://linkedin.com/in/..." />
+              </label>
+              <label>
+                WhatsApp
+                <input name="whatsapp" placeholder="+49 ..." />
+              </label>
+              <label className="checkboxField">
+                <input name="is_primary" type="checkbox" />
+                设为主要联系人
+              </label>
+              <button className="primaryButton" type="submit" disabled={addingContact}>
+                {addingContact ? "添加中..." : "添加联系人"}
+              </button>
+            </form>
+
+            <section className="detailBlock">
+              <h3>来源证据</h3>
+              {detail.evidence.length === 0 ? (
+                <p className="mutedCopy">暂无证据。</p>
+              ) : (
+                <ul className="evidenceList">
+                  {detail.evidence.map((item) => (
+                    <li key={`${item.signal_name}-${item.source_url}`}>
+                      <strong>{item.signal_name}</strong>
+                      <span>{item.source_excerpt}</span>
+                      <small>{item.source_url}</small>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
+
+            <form className="followUpForm" onSubmit={onAddFollowUp}>
+              <h3>新增跟进记录</h3>
+              <label>
+                跟进类型
+                <select name="activity_type" defaultValue="note">
+                  <option value="note">备注</option>
+                  <option value="email">邮件</option>
+                  <option value="call">电话</option>
+                  <option value="meeting">会议</option>
+                  <option value="quote">报价</option>
+                </select>
+              </label>
+              <label>
+                下次跟进时间
+                <input name="next_follow_up_at" type="datetime-local" />
+              </label>
+              <label className="wideField">
+                跟进内容
+                <textarea name="content" required placeholder="例如：已发送目录，客户要求下周提供 FOB 报价。" />
+              </label>
+              <button className="primaryButton" type="submit" disabled={addingFollowUp}>
+                {addingFollowUp ? "添加中..." : "添加跟进记录"}
+              </button>
+            </form>
+
+            <section className="detailBlock">
+              <h3>跟进记录</h3>
+              {detail.follow_ups.length === 0 ? (
+                <p className="mutedCopy">暂无跟进记录。</p>
+              ) : (
+                <ol className="followUpList">
+                  {detail.follow_ups.map((record: FollowUpRecord) => (
+                    <li key={record.id}>
+                      <div>
+                        <strong>{record.activity_type}</strong>
+                        <time>{formatDateTime(record.created_at)}</time>
+                      </div>
+                      <p>{record.content}</p>
+                      <small>下次跟进：{formatDateTime(record.next_follow_up_at)}</small>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
+          </div>
+        )}
       </aside>
     </div>
   );
 }
 
 export default function HomePage() {
-  const [activeNav, setActiveNav] = useState("Overview");
+  const [activeNav, setActiveNav] = useState("总览");
   const [session, setSession] = useState<Session | null>(null);
   const [checkingSession, setCheckingSession] = useState(true);
   const [loadingProductLines, setLoadingProductLines] = useState(false);
   const [creatingProductLine, setCreatingProductLine] = useState(false);
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
   const [selectedProductLineId, setSelectedProductLineId] = useState("");
-  const [targetMarket, setTargetMarket] = useState("Germany");
+  const [targetMarket, setTargetMarket] = useState("德国");
   const [buyerProfile, setBuyerProfile] = useState("");
   const [leads, setLeads] = useState<Lead[]>([]);
   const [running, setRunning] = useState(false);
-  const [runMessage, setRunMessage] = useState("Create or select a product line to start discovery");
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  const [savingToCrm, setSavingToCrm] = useState(false);
+  const [creatingManualLead, setCreatingManualLead] = useState(false);
+  const [deletingLeadId, setDeletingLeadId] = useState("");
+  const [selectedLeadId, setSelectedLeadId] = useState("");
+  const [leadDetail, setLeadDetail] = useState<LeadDetail | null>(null);
+  const [loadingLeadDetail, setLoadingLeadDetail] = useState(false);
+  const [savingLeadDetail, setSavingLeadDetail] = useState(false);
+  const [addingContact, setAddingContact] = useState(false);
+  const [deletingContactId, setDeletingContactId] = useState("");
+  const [generatingDraftContactId, setGeneratingDraftContactId] = useState("");
+  const [addingFollowUp, setAddingFollowUp] = useState(false);
+  const [emailDrafts, setEmailDrafts] = useState<EmailDraft[]>([]);
+  const [loadingEmailDrafts, setLoadingEmailDrafts] = useState(false);
+  const [selectedDraftId, setSelectedDraftId] = useState("");
+  const [savingEmailDraft, setSavingEmailDraft] = useState(false);
+  const [reviewingEmailDraft, setReviewingEmailDraft] = useState(false);
+  const [runMessage, setRunMessage] = useState("请创建或选择产品线后开始搜索");
   const [priorityOnly, setPriorityOnly] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [error, setError] = useState("");
@@ -357,6 +882,10 @@ export default function HomePage() {
   const selectedProductLine = useMemo(
     () => productLines.find((productLine) => productLine.id === selectedProductLineId),
     [productLines, selectedProductLineId]
+  );
+  const selectedEmailDraft = useMemo(
+    () => emailDrafts.find((draft) => draft.id === selectedDraftId) ?? emailDrafts[0] ?? null,
+    [emailDrafts, selectedDraftId]
   );
 
   useEffect(() => {
@@ -374,11 +903,22 @@ export default function HomePage() {
         if (items.length > 0) {
           setSelectedProductLineId(items[0].id);
           setBuyerProfile(items[0].buyer_profiles[0] ?? "");
-          setRunMessage("Ready for a targeted discovery run");
+          setRunMessage("已准备好进行定向客户搜索");
         }
       })
-      .catch((caught: unknown) => handleApiFailure(caught, "Could not load product lines"))
+      .catch((caught: unknown) => handleApiFailure(caught, "无法加载产品线"))
       .finally(() => setLoadingProductLines(false));
+    listLeads(currentSession)
+      .then((items) => setLeads(items))
+      .catch((caught: unknown) => handleApiFailure(caught, "无法加载客户列表"));
+    setLoadingEmailDrafts(true);
+    listEmailDrafts(currentSession)
+      .then((items) => {
+        setEmailDrafts(items);
+        if (items.length > 0) setSelectedDraftId(items[0].id);
+      })
+      .catch((caught: unknown) => handleApiFailure(caught, "无法加载邮件审批队列"))
+      .finally(() => setLoadingEmailDrafts(false));
   }, []);
 
   function handleApiFailure(caught: unknown, fallback: string) {
@@ -388,6 +928,24 @@ export default function HomePage() {
       return;
     }
     setError(caught instanceof Error ? caught.message : fallback);
+  }
+
+  async function refreshEmailDrafts(nextSelectedDraftId?: string) {
+    if (!session) return;
+    const items = await listEmailDrafts(session);
+    setEmailDrafts(items);
+    if (nextSelectedDraftId) {
+      setSelectedDraftId(nextSelectedDraftId);
+    } else if (selectedDraftId && !items.some((draft) => draft.id === selectedDraftId)) {
+      setSelectedDraftId(items[0]?.id ?? "");
+    } else if (!selectedDraftId && items.length > 0) {
+      setSelectedDraftId(items[0].id);
+    }
+  }
+
+  function openEmailDraftQueue(draftId?: string) {
+    if (draftId) setSelectedDraftId(draftId);
+    setReviewOpen(true);
   }
 
   function logout() {
@@ -418,10 +976,10 @@ export default function HomePage() {
       setProductLines((current) => [...current, created]);
       setSelectedProductLineId(created.id);
       setBuyerProfile(created.buyer_profiles[0] ?? "");
-      setRunMessage("Ready for a targeted discovery run");
+      setRunMessage("已准备好进行定向客户搜索");
       event.currentTarget.reset();
     } catch (caught) {
-      handleApiFailure(caught, "Could not create product line");
+      handleApiFailure(caught, "无法创建产品线");
     } finally {
       setCreatingProductLine(false);
     }
@@ -432,7 +990,7 @@ export default function HomePage() {
     if (!session || !selectedProductLineId) return;
     setRunning(true);
     setError("");
-    setRunMessage("Discovery running");
+    setRunMessage("客户搜索运行中");
     try {
       const run = await startDiscovery(session, {
         product_line_id: selectedProductLineId,
@@ -440,14 +998,284 @@ export default function HomePage() {
         buyer_profile: buyerProfile || undefined,
         limit: 20,
       });
-      const nextLeads = await listLeads(session, run.workflow_run_id);
+      const nextLeads = await listLeads(session);
       setLeads(nextLeads);
-      setRunMessage(`Discovery complete / ${run.lead_count} companies screened / ${run.query}`);
+      setSelectedLeadIds([]);
+      setRunMessage(`搜索完成 / 已筛选 ${run.lead_count} 家公司 / ${run.query}`);
     } catch (caught) {
-      handleApiFailure(caught, "Customer discovery failed");
-      setRunMessage("Discovery failed");
+      handleApiFailure(caught, "客户搜索失败");
+      setRunMessage("客户搜索失败");
     } finally {
       setRunning(false);
+    }
+  }
+
+  async function createManualLeadFromForm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session) return;
+    const form = new FormData(event.currentTarget);
+    setCreatingManualLead(true);
+    setError("");
+    try {
+      const created = await createManualLead(session, {
+        product_line_id: String(form.get("product_line_id") ?? ""),
+        company_name: String(form.get("company_name") ?? "").trim(),
+        website: String(form.get("website") ?? "").trim(),
+        target_market: String(form.get("target_market") ?? "").trim(),
+        buyer_profile: String(form.get("buyer_profile") ?? "").trim() || undefined,
+        notes: String(form.get("notes") ?? "").trim(),
+      });
+      setLeads((current) => [created, ...current.filter((lead) => lead.id !== created.id)]);
+      setSelectedLeadIds((current) => current.filter((leadId) => leadId !== created.id));
+      event.currentTarget.reset();
+    } catch (caught) {
+      handleApiFailure(caught, "无法添加客户");
+    } finally {
+      setCreatingManualLead(false);
+    }
+  }
+
+  async function deleteCustomerLead(leadId: string) {
+    if (!session) return;
+    setDeletingLeadId(leadId);
+    setError("");
+    try {
+      await deleteLead(session, leadId);
+      setLeads((current) => current.filter((lead) => lead.id !== leadId));
+      setSelectedLeadIds((current) => current.filter((selectedId) => selectedId !== leadId));
+      setEmailDrafts((current) => current.filter((draft) => draft.lead_id !== leadId));
+      if (selectedLeadId === leadId) {
+        setSelectedLeadId("");
+        setLeadDetail(null);
+      }
+    } catch (caught) {
+      handleApiFailure(caught, "无法删除客户");
+    } finally {
+      setDeletingLeadId("");
+    }
+  }
+
+  function selectLeadForCrm(leadId: string, selected: boolean) {
+    setSelectedLeadIds((current) => {
+      if (selected) return current.includes(leadId) ? current : [...current, leadId];
+      return current.filter((selectedId) => selectedId !== leadId);
+    });
+  }
+
+  function selectAllVisibleLeadsForCrm(leadIds: string[], selected: boolean) {
+    setSelectedLeadIds((current) => {
+      if (!selected) return current.filter((leadId) => !leadIds.includes(leadId));
+      return Array.from(new Set([...current, ...leadIds]));
+    });
+  }
+
+  async function saveSelectedLeadsToCrm() {
+    if (!session || selectedLeadIds.length === 0) return;
+    const leadsToSave = leads.filter((lead) => selectedLeadIds.includes(lead.id) && !isCrmLead(lead));
+    if (leadsToSave.length === 0) return;
+    setSavingToCrm(true);
+    setError("");
+    try {
+      const updatedLeads = await Promise.all(
+        leadsToSave.map((lead) =>
+          updateLeadDetail(session, lead.id, {
+            status: "to_contact",
+            notes: lead.notes,
+            owner_user_id: lead.owner_user_id,
+          })
+        )
+      );
+      const updatedById = new Map(updatedLeads.map((lead) => [lead.id, lead]));
+      setLeads((current) => current.map((lead) => updatedById.get(lead.id) ?? lead));
+      setSelectedLeadIds((current) => current.filter((leadId) => !updatedById.has(leadId)));
+      setRunMessage(`已保存 ${updatedLeads.length} 个客户到 CRM，状态为待联系`);
+      if (leadDetail && updatedById.has(leadDetail.id)) {
+        const refreshed = await getLeadDetail(session, leadDetail.id);
+        setLeadDetail(refreshed);
+      }
+    } catch (caught) {
+      handleApiFailure(caught, "无法保存到 CRM");
+    } finally {
+      setSavingToCrm(false);
+    }
+  }
+
+  async function openLeadDetail(leadId: string) {
+    if (!session) return;
+    setSelectedLeadId(leadId);
+    setLoadingLeadDetail(true);
+    setError("");
+    try {
+      const detail = await getLeadDetail(session, leadId);
+      setLeadDetail(detail);
+    } catch (caught) {
+      handleApiFailure(caught, "无法加载客户详情");
+      setSelectedLeadId("");
+      setLeadDetail(null);
+    } finally {
+      setLoadingLeadDetail(false);
+    }
+  }
+
+  function closeLeadDetail() {
+    setSelectedLeadId("");
+    setLeadDetail(null);
+  }
+
+  async function saveLeadDetail(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !leadDetail) return;
+    const form = new FormData(event.currentTarget);
+    setSavingLeadDetail(true);
+    setError("");
+    try {
+      const updated = await updateLeadDetail(session, leadDetail.id, {
+        status: String(form.get("status") ?? "new") as LeadStatus,
+        notes: String(form.get("notes") ?? ""),
+        owner_user_id: null,
+      });
+      setLeads((current) => current.map((lead) => (lead.id === updated.id ? updated : lead)));
+      const refreshed = await getLeadDetail(session, leadDetail.id);
+      setLeadDetail(refreshed);
+    } catch (caught) {
+      handleApiFailure(caught, "无法保存客户详情");
+    } finally {
+      setSavingLeadDetail(false);
+    }
+  }
+
+  async function addContactRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !leadDetail) return;
+    const form = new FormData(event.currentTarget);
+    setAddingContact(true);
+    setError("");
+    try {
+      await createContact(session, leadDetail.id, {
+        name: String(form.get("name") ?? "").trim(),
+        title: String(form.get("title") ?? "").trim(),
+        email: String(form.get("email") ?? "").trim(),
+        phone: String(form.get("phone") ?? "").trim(),
+        linkedin_url: String(form.get("linkedin_url") ?? "").trim(),
+        whatsapp: String(form.get("whatsapp") ?? "").trim(),
+        is_primary: form.get("is_primary") === "on",
+      });
+      const refreshed = await getLeadDetail(session, leadDetail.id);
+      setLeadDetail(refreshed);
+      event.currentTarget.reset();
+    } catch (caught) {
+      handleApiFailure(caught, "无法添加联系人");
+    } finally {
+      setAddingContact(false);
+    }
+  }
+
+  async function deleteContactRecord(contactId: string) {
+    if (!session || !leadDetail) return;
+    setDeletingContactId(contactId);
+    setError("");
+    try {
+      await deleteContact(session, leadDetail.id, contactId);
+      const refreshed = await getLeadDetail(session, leadDetail.id);
+      setLeadDetail(refreshed);
+      setEmailDrafts((current) => current.filter((draft) => draft.contact_id !== contactId));
+    } catch (caught) {
+      handleApiFailure(caught, "无法删除联系人");
+    } finally {
+      setDeletingContactId("");
+    }
+  }
+
+  async function createEmailDraftForContact(contactId: string) {
+    if (!session || !leadDetail) return;
+    setGeneratingDraftContactId(contactId);
+    setError("");
+    try {
+      const draft = await createEmailDraft(session, leadDetail.id, contactId);
+      await refreshEmailDrafts(draft.id);
+      setReviewOpen(true);
+    } catch (caught) {
+      handleApiFailure(caught, "无法生成开发信草稿");
+    } finally {
+      setGeneratingDraftContactId("");
+    }
+  }
+
+  async function addFollowUpRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !leadDetail) return;
+    const form = new FormData(event.currentTarget);
+    const nextFollowUp = String(form.get("next_follow_up_at") ?? "");
+    setAddingFollowUp(true);
+    setError("");
+    try {
+      await createFollowUp(session, leadDetail.id, {
+        activity_type: String(form.get("activity_type") ?? "note"),
+        content: String(form.get("content") ?? "").trim(),
+        next_follow_up_at: nextFollowUp ? new Date(nextFollowUp).toISOString() : null,
+      });
+      const refreshed = await getLeadDetail(session, leadDetail.id);
+      setLeadDetail(refreshed);
+      event.currentTarget.reset();
+    } catch (caught) {
+      handleApiFailure(caught, "无法添加跟进记录");
+    } finally {
+      setAddingFollowUp(false);
+    }
+  }
+
+  async function saveEmailDraft(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !selectedEmailDraft) return;
+    const form = new FormData(event.currentTarget);
+    setSavingEmailDraft(true);
+    setError("");
+    try {
+      const updated = await updateEmailDraft(session, selectedEmailDraft.id, {
+        subject: String(form.get("subject") ?? "").trim(),
+        body: String(form.get("body") ?? "").trim(),
+      });
+      setEmailDrafts((current) => current.map((draft) => (draft.id === updated.id ? updated : draft)));
+      setSelectedDraftId(updated.id);
+    } catch (caught) {
+      handleApiFailure(caught, "无法保存开发信草稿");
+    } finally {
+      setSavingEmailDraft(false);
+    }
+  }
+
+  async function approveEmailDraft() {
+    if (!session || !selectedEmailDraft) return;
+    setReviewingEmailDraft(true);
+    setError("");
+    try {
+      const updated = await reviewEmailDraft(session, selectedEmailDraft.id, { action: "approve" });
+      setEmailDrafts((current) => current.map((draft) => (draft.id === updated.id ? updated : draft)));
+      setSelectedDraftId(updated.id);
+    } catch (caught) {
+      handleApiFailure(caught, "无法批准开发信草稿");
+    } finally {
+      setReviewingEmailDraft(false);
+    }
+  }
+
+  async function rejectEmailDraft(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !selectedEmailDraft) return;
+    const form = new FormData(event.currentTarget);
+    setReviewingEmailDraft(true);
+    setError("");
+    try {
+      const updated = await reviewEmailDraft(session, selectedEmailDraft.id, {
+        action: "reject",
+        rejection_reason: String(form.get("rejection_reason") ?? "").trim(),
+      });
+      setEmailDrafts((current) => current.map((draft) => (draft.id === updated.id ? updated : draft)));
+      setSelectedDraftId(updated.id);
+    } catch (caught) {
+      handleApiFailure(caught, "无法驳回开发信草稿");
+    } finally {
+      setReviewingEmailDraft(false);
     }
   }
 
@@ -455,7 +1283,7 @@ export default function HomePage() {
     return (
       <main className="authCheck">
         <span className="statusDot" aria-hidden="true" />
-        Loading workspace...
+        正在加载工作台...
       </main>
     );
   }
@@ -463,28 +1291,28 @@ export default function HomePage() {
   return (
     <main className="appShell">
       <aside className="sidebar">
-        <a className="brand" href="#top" aria-label="Trade Axis home"><span>TA</span><strong>TRADE<br />AXIS</strong></a>
-        <nav aria-label="Primary navigation">
+        <a className="brand" href="#top" aria-label="Trade Axis 首页"><span>TA</span><strong>TRADE<br />AXIS</strong></a>
+        <nav aria-label="主导航">
           {navItems.map((item) => (
             <button className={activeNav === item ? "navItem active" : "navItem"} key={item} type="button" onClick={() => setActiveNav(item)}>
               <span className="navMarker" aria-hidden="true" />{item}
             </button>
           ))}
         </nav>
-        <div className="sidebarFooter"><span className="connectionDot" />System operational<span className="tenant">{session.organization_role ?? "MEMBER"}</span></div>
+        <div className="sidebarFooter"><span className="connectionDot" />系统运行中<span className="tenant">{session.organization_role ?? "成员"}</span></div>
       </aside>
       <section className="workspace" id="top">
         <header className="topbar">
-          <div className="crumbs"><span>Sales workspace</span><strong>{activeNav}</strong></div>
-          <div className="topbarActions"><button className="utilityButton" type="button">EN</button><button className="utilityButton logoutButton" type="button" onClick={logout}>Logout</button><button className="profileButton" type="button" aria-label="Open Mia Chen profile">MC</button></div>
+          <div className="crumbs"><span>销售工作台</span><strong>{activeNav}</strong></div>
+          <div className="topbarActions"><button className="utilityButton" type="button">中文</button><button className="utilityButton logoutButton" type="button" onClick={logout}>退出登录</button><button className="profileButton" type="button" aria-label="打开 Mia Chen 资料">MC</button></div>
         </header>
         <div className="content">
           <section className="pageHeading">
-            <div><p className="sectionLabel">Customer development</p><h1>Sales command center</h1><p>Configure product lines, launch evidence-backed customer discovery, and move qualified leads toward CRM and outreach.</p></div>
-            <button className="outlineButton exportButton" type="button">Export activity</button>
+            <div><p className="sectionLabel">客户开发</p><h1>外贸客户开发工作台</h1><p>配置产品线，启动基于公开证据的客户搜索，并把合格线索推进到 CRM 和开发信流程。</p></div>
+            <button className="outlineButton exportButton" type="button">导出活动</button>
           </section>
           {error && <div className="errorBanner" role="alert">{error}</div>}
-          <section className="metricGrid" aria-label="Sales metrics">{metrics.map((metric) => <MetricTile key={metric.label} {...metric} />)}</section>
+          <section className="metricGrid" aria-label="销售指标">{metrics.map((metric) => <MetricTile key={metric.label} {...metric} />)}</section>
           <ProductLineSetup productLines={productLines} loading={loadingProductLines} creating={creatingProductLine} onCreate={createProductLineFromForm} />
           <CustomerAgent
             productLines={productLines}
@@ -492,17 +1320,69 @@ export default function HomePage() {
             targetMarket={targetMarket}
             buyerProfile={buyerProfile}
             running={running}
-            runMessage={selectedProductLine ? runMessage : "Create the first product line before discovery"}
+            runMessage={selectedProductLine ? runMessage : "请先创建第一个产品线，再开始搜索"}
             onProductLineChange={selectProductLine}
             onTargetMarketChange={setTargetMarket}
             onBuyerProfileChange={setBuyerProfile}
             onRun={runDiscovery}
           />
-          <div className="secondaryGrid"><ReviewQueue onOpen={() => setReviewOpen(true)} /><FollowUpTimeline /></div>
-          <LeadTable leads={leads} priorityOnly={priorityOnly} onPriorityToggle={() => setPriorityOnly((current) => !current)} />
+          <CRMCustomerManager
+            leads={leads}
+            productLines={productLines}
+            selectedProductLineId={selectedProductLineId}
+            creating={creatingManualLead}
+            deletingLeadId={deletingLeadId}
+            onCreate={createManualLeadFromForm}
+            onDelete={deleteCustomerLead}
+            onOpenDetail={openLeadDetail}
+          />
+          <div className="secondaryGrid">
+            <ReviewQueue
+              drafts={emailDrafts}
+              loading={loadingEmailDrafts}
+              onOpen={() => openEmailDraftQueue()}
+              onOpenDraft={openEmailDraftQueue}
+            />
+            <FollowUpTimeline />
+          </div>
+          <LeadTable
+            leads={leads}
+            priorityOnly={priorityOnly}
+            selectedLeadIds={selectedLeadIds}
+            savingToCrm={savingToCrm}
+            onPriorityToggle={() => setPriorityOnly((current) => !current)}
+            onSelectLead={selectLeadForCrm}
+            onSelectAllVisible={selectAllVisibleLeadsForCrm}
+            onSaveToCrm={saveSelectedLeadsToCrm}
+            onOpenDetail={openLeadDetail}
+          />
         </div>
       </section>
-      <ReviewDrawer open={reviewOpen} onClose={() => setReviewOpen(false)} />
+      <CustomerDetailDrawer
+        detail={leadDetail}
+        loading={loadingLeadDetail}
+        saving={savingLeadDetail}
+        addingContact={addingContact}
+        addingFollowUp={addingFollowUp}
+        deletingContactId={deletingContactId}
+        generatingDraftContactId={generatingDraftContactId}
+        onClose={closeLeadDetail}
+        onSave={saveLeadDetail}
+        onAddContact={addContactRecord}
+        onDeleteContact={deleteContactRecord}
+        onCreateEmailDraft={createEmailDraftForContact}
+        onAddFollowUp={addFollowUpRecord}
+      />
+      <ReviewDrawer
+        open={reviewOpen}
+        draft={selectedEmailDraft}
+        saving={savingEmailDraft}
+        reviewing={reviewingEmailDraft}
+        onClose={() => setReviewOpen(false)}
+        onSave={saveEmailDraft}
+        onApprove={approveEmailDraft}
+        onReject={rejectEmailDraft}
+      />
     </main>
   );
 }

@@ -39,16 +39,32 @@ test("registers a workspace, stores the session, and opens the dashboard", async
       body: JSON.stringify([]),
     });
   });
+  await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/discovery\/organizations\/org-1\/leads/, async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer local-session-token");
+    await route.fulfill({
+      contentType: "application/json",
+      status: 200,
+      body: JSON.stringify([]),
+    });
+  });
+  await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/discovery\/organizations\/org-1\/email-drafts/, async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer local-session-token");
+    await route.fulfill({
+      contentType: "application/json",
+      status: 200,
+      body: JSON.stringify([]),
+    });
+  });
 
   await page.goto("/login");
-  await page.getByRole("button", { name: "New here? Create workspace" }).click();
-  await page.getByLabel("Organization").fill("Nova Export");
-  await page.getByLabel("Name").fill("Mia Chen");
-  await page.getByLabel("Email").fill("mia@example.com");
-  await page.getByLabel("Password").fill("a-long-local-password");
-  await page.getByRole("button", { name: "Create account" }).click();
+  await page.getByRole("button", { name: "第一次使用？创建工作区" }).click();
+  await page.getByLabel("组织名称").fill("Nova Export");
+  await page.getByLabel("姓名").fill("Mia Chen");
+  await page.getByLabel("邮箱").fill("mia@example.com");
+  await page.getByLabel("密码").fill("a-long-local-password");
+  await page.getByRole("button", { name: "创建账号" }).click();
 
-  await expect(page.getByRole("heading", { name: "Sales command center" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "外贸客户开发工作台" })).toBeVisible();
   expect(membershipRequested).toBe(true);
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("trade-axis-session")))

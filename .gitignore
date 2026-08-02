@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 backend/.venv/
 backend/*.egg-info/
+backend/*.db
 frontend/node_modules/
 frontend/.next/
 frontend/.npm-cache/
