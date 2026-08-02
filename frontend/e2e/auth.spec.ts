@@ -55,6 +55,14 @@ test("registers a workspace, stores the session, and opens the dashboard", async
       body: JSON.stringify([]),
     });
   });
+  await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/discovery\/organizations\/org-1\/follow-ups/, async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer local-session-token");
+    await route.fulfill({
+      contentType: "application/json",
+      status: 200,
+      body: JSON.stringify([]),
+    });
+  });
 
   await page.goto("/login");
   await page.getByRole("button", { name: "第一次使用？创建工作区" }).click();

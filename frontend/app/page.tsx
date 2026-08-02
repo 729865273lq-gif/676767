@@ -12,6 +12,7 @@ import {
   deleteLead,
   getLeadDetail,
   listEmailDrafts,
+  listFollowUps,
   listLeads,
   listProductLines,
   markEmailDraftSent,
@@ -518,7 +519,15 @@ function ReviewQueue({
   );
 }
 
-function FollowUpTimeline() {
+function FollowUpTimeline({
+  records,
+  loading,
+  onRefresh,
+}: {
+  records: FollowUpRecord[];
+  loading: boolean;
+  onRefresh: () => void;
+}) {
   return (
     <section className="timelinePanel" aria-labelledby="followup-title">
       <div className="sectionHeader compact">
@@ -526,13 +535,26 @@ function FollowUpTimeline() {
           <p className="sectionLabel">销售执行</p>
           <h2 id="followup-title">跟进控制</h2>
         </div>
-        <button className="iconTextButton" type="button">查看 CRM</button>
+        <button className="iconTextButton" type="button" onClick={onRefresh}>刷新</button>
       </div>
-      <ol className="timeline">
-        <li><time>09:30</time><span className="timelineDot blueDot" /><div><strong>回复待确认</strong><p>HelioTech AG 索要 2026 产品目录。</p></div></li>
-        <li><time>11:00</time><span className="timelineDot cyanDot" /><div><strong>发送已审批开发信</strong><p>LumenHaus GmbH / 负责人：Mia Chen</p></div></li>
-        <li><time>明天</time><span className="timelineDot orangeDot" /><div><strong>跟进报价</strong><p>Rheinland Industriebedarf / 4 天未回复</p></div></li>
-      </ol>
+      {loading ? (
+        <div className="emptyState">正在加载跟进记录...</div>
+      ) : records.length === 0 ? (
+        <div className="emptyState">暂无跟进记录。发送开发信或在客户详情页添加跟进后，这里会显示下一步动作。</div>
+      ) : (
+        <ol className="timeline">
+          {records.slice(0, 5).map((record) => (
+            <li key={record.id}>
+              <time>{formatTimelineTime(record.next_follow_up_at ?? record.created_at)}</time>
+              <span className={`timelineDot ${record.activity_type === "email_sent" ? "cyanDot" : "blueDot"}`} />
+              <div>
+                <strong>{followUpActivityLabel(record.activity_type)}</strong>
+                <p>{record.lead_company_name ?? "客户"} / {record.content}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
     </section>
   );
 }
@@ -628,6 +650,21 @@ function formatDateTime(value: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function formatTimelineTime(value: string | null) {
+  if (!value) return "待定";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+}
+
+function followUpActivityLabel(activityType: string) {
+  if (activityType === "email_sent") return "开发信已发送";
+  if (activityType === "email") return "邮件跟进";
+  if (activityType === "call") return "电话跟进";
+  if (activityType === "meeting") return "会议跟进";
+  return "客户备注";
 }
 
 function CustomerDetailDrawer({
@@ -878,6 +915,8 @@ export default function HomePage() {
   const [deletingContactId, setDeletingContactId] = useState("");
   const [generatingDraftContactId, setGeneratingDraftContactId] = useState("");
   const [addingFollowUp, setAddingFollowUp] = useState(false);
+  const [followUps, setFollowUps] = useState<FollowUpRecord[]>([]);
+  const [loadingFollowUps, setLoadingFollowUps] = useState(false);
   const [emailDrafts, setEmailDrafts] = useState<EmailDraft[]>([]);
   const [loadingEmailDrafts, setLoadingEmailDrafts] = useState(false);
   const [selectedDraftId, setSelectedDraftId] = useState("");
@@ -920,6 +959,11 @@ export default function HomePage() {
     listLeads(currentSession)
       .then((items) => setLeads(items))
       .catch((caught: unknown) => handleApiFailure(caught, "无法加载客户列表"));
+    setLoadingFollowUps(true);
+    listFollowUps(currentSession)
+      .then((items) => setFollowUps(items))
+      .catch((caught: unknown) => handleApiFailure(caught, "无法加载跟进记录"))
+      .finally(() => setLoadingFollowUps(false));
     setLoadingEmailDrafts(true);
     listEmailDrafts(currentSession)
       .then((items) => {
@@ -955,6 +999,19 @@ export default function HomePage() {
   function openEmailDraftQueue(draftId?: string) {
     if (draftId) setSelectedDraftId(draftId);
     setReviewOpen(true);
+  }
+
+  async function refreshFollowUps() {
+    if (!session) return;
+    setLoadingFollowUps(true);
+    try {
+      const items = await listFollowUps(session);
+      setFollowUps(items);
+    } catch (caught) {
+      handleApiFailure(caught, "无法刷新跟进记录");
+    } finally {
+      setLoadingFollowUps(false);
+    }
   }
 
   function logout() {
@@ -1171,6 +1228,7 @@ export default function HomePage() {
       });
       const refreshed = await getLeadDetail(session, leadDetail.id);
       setLeadDetail(refreshed);
+      await refreshFollowUps();
       event.currentTarget.reset();
     } catch (caught) {
       handleApiFailure(caught, "无法添加联系人");
@@ -1285,6 +1343,7 @@ export default function HomePage() {
         const refreshed = await getLeadDetail(session, updated.lead_id);
         setLeadDetail(refreshed);
       }
+      await refreshFollowUps();
     } catch (caught) {
       handleApiFailure(caught, "无法标记开发信已发送");
     } finally {
@@ -1376,7 +1435,11 @@ export default function HomePage() {
               onOpen={() => openEmailDraftQueue()}
               onOpenDraft={openEmailDraftQueue}
             />
-            <FollowUpTimeline />
+            <FollowUpTimeline
+              records={followUps}
+              loading={loadingFollowUps}
+              onRefresh={refreshFollowUps}
+            />
           </div>
           <LeadTable
             leads={leads}

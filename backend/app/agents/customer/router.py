@@ -93,6 +93,11 @@ class FollowUpResponse(BaseModel):
     created_at: datetime
 
 
+class OrganizationFollowUpResponse(FollowUpResponse):
+    lead_company_name: str
+    lead_status: LeadStatus
+
+
 class ContactRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     title: str = Field(default="", max_length=200)
@@ -167,6 +172,14 @@ def follow_up_response(record: FollowUpRecord) -> FollowUpResponse:
         content=record.content,
         next_follow_up_at=record.next_follow_up_at,
         created_at=record.created_at,
+    )
+
+
+def organization_follow_up_response(record: FollowUpRecord, lead: Lead) -> OrganizationFollowUpResponse:
+    return OrganizationFollowUpResponse(
+        **follow_up_response(record).model_dump(),
+        lead_company_name=lead.company_name,
+        lead_status=lead.status,
     )
 
 
@@ -620,6 +633,27 @@ def create_follow_up(
         session.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
     return follow_up_response(record)
+
+
+@router.get("/organizations/{organization_id}/follow-ups", response_model=list[OrganizationFollowUpResponse])
+def list_follow_ups(
+    organization_id: str,
+    limit: int = 20,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> list[OrganizationFollowUpResponse]:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+    except PermissionError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    safe_limit = min(max(limit, 1), 50)
+    return [
+        organization_follow_up_response(record, lead)
+        for record, lead in LeadService(session).list_follow_ups(
+            organization_id=organization_id,
+            limit=safe_limit,
+        )
+    ]
 
 
 @router.get("/organizations/{organization_id}/leads/{lead_id}", response_model=LeadResponse)

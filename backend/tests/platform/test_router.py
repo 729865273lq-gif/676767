@@ -398,6 +398,10 @@ def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
         f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/detail",  # type: ignore[attr-defined]
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
     )
+    organization_follow_ups = client.get(
+        f"/discovery/organizations/{client.acme_id}/follow-ups",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
     follow_up = client.post(
         f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/follow-ups",  # type: ignore[attr-defined]
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
@@ -441,8 +445,13 @@ def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
     assert any(
         record["activity_type"] == "email_sent"
         and "Edited subject" in record["content"]
+        and record["next_follow_up_at"] is not None
         for record in sent_detail.json()["follow_ups"]
     )
+    assert organization_follow_ups.status_code == 200
+    assert organization_follow_ups.json()[0]["lead_company_name"] == "Follow Up GmbH"
+    assert organization_follow_ups.json()[0]["activity_type"] == "email_sent"
+    assert organization_follow_ups.json()[0]["lead_status"] == LeadStatus.CONTACTED
     assert follow_up.status_code == 201
     assert detail.status_code == 200
     assert detail.json()["contacts"][0]["email"] == "anna@follow-up.example"

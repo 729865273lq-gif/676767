@@ -97,6 +97,9 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
   await page.route(/\/discovery\/organizations\/org-1\/email-drafts$/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
   });
+  await page.route(/\/discovery\/organizations\/org-1\/follow-ups/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "外贸客户开发工作台" })).toBeVisible();

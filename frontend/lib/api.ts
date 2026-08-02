@@ -56,6 +56,8 @@ export type FollowUpRecord = {
   content: string;
   next_follow_up_at: string | null;
   created_at: string;
+  lead_company_name?: string;
+  lead_status?: LeadStatus;
 };
 
 export type ContactRecord = {
@@ -228,6 +230,13 @@ export function createFollowUp(session: Session, leadId: string, payload: Follow
       method: "POST",
       body: JSON.stringify(payload),
     }
+  );
+}
+
+export function listFollowUps(session: Session, limit = 20) {
+  return requestJson<FollowUpRecord[]>(
+    session,
+    `/discovery/organizations/${session.organization_id}/follow-ups?limit=${limit}`
   );
 }
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import urlparse
 
 from sqlalchemy import delete, select
@@ -236,6 +236,25 @@ class LeadService:
             )
         )
 
+    def list_follow_ups(
+        self,
+        *,
+        organization_id: str,
+        limit: int = 20,
+    ) -> list[tuple[FollowUpRecord, Lead]]:
+        statement = (
+            select(FollowUpRecord, Lead)
+            .join(Lead, Lead.id == FollowUpRecord.lead_id)
+            .where(FollowUpRecord.organization_id == organization_id, Lead.organization_id == organization_id)
+            .order_by(
+                FollowUpRecord.next_follow_up_at.is_(None),
+                FollowUpRecord.next_follow_up_at,
+                FollowUpRecord.created_at.desc(),
+            )
+            .limit(limit)
+        )
+        return list(self.session.execute(statement).all())
+
     def add_contact(
         self,
         *,
@@ -442,7 +461,7 @@ class LeadService:
                 actor_user_id=actor_user_id,
                 activity_type="email_sent",
                 content=f"已人工发送开发信给 {contact.name} <{contact.email}>：{draft.subject}",
-                next_follow_up_at=None,
+                next_follow_up_at=sent_at + timedelta(days=3),
                 created_at=sent_at,
             )
         )

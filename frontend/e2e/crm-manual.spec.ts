@@ -87,6 +87,9 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   let contacts: Array<Record<string, unknown>> = [];
   let followUps: Array<Record<string, unknown>> = [];
   let emailDrafts: Array<Record<string, unknown>> = [];
+  await page.route(/\/discovery\/organizations\/org-1\/follow-ups/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(followUps) });
+  });
   await page.route(/\/discovery\/organizations\/org-1\/leads\/lead-manual-1\/detail$/, async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -199,8 +202,10 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
         actor_user_id: "user-1",
         activity_type: "email_sent",
         content: "已人工发送开发信给 Anna Weber <anna@berlin-lighting.example>：Updated LED introduction",
-        next_follow_up_at: null,
+        next_follow_up_at: "2026-08-04T08:15:00Z",
         created_at: "2026-08-01T08:15:00Z",
+        lead_company_name: "Berlin Lighting GmbH",
+        lead_status: "contacted",
       },
       ...followUps,
     ];
@@ -261,7 +266,9 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   await expect(page.locator(".draftCard .status", { hasText: "已发送" })).toBeVisible();
   await page.getByLabel("关闭审核队列").click();
   await expect(page.locator(".detailSummary strong").filter({ hasText: "已联系" })).toBeVisible();
-  await expect(page.getByText("已人工发送开发信给 Anna Weber")).toBeVisible();
+  await expect(page.locator(".followUpList").getByText("已人工发送开发信给 Anna Weber")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "跟进控制" })).toBeVisible();
+  await expect(page.locator(".timeline").getByText("Berlin Lighting GmbH / 已人工发送开发信给 Anna Weber")).toBeVisible();
 
   await page.getByLabel("客户状态").selectOption("interested");
   await page.getByLabel("客户备注").fill("客户要求下周提供 FOB 报价。");
