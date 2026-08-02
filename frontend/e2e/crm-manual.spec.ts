@@ -264,6 +264,11 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   await page.getByRole("button", { name: "添加客户" }).click();
 
   await expect(page.getByLabel("CRM 客户列表").getByText("Berlin Lighting GmbH")).toBeVisible();
+  await page.getByLabel("搜索 CRM 客户").fill("berlin");
+  await expect(page.getByLabel("CRM 客户列表").getByText("Berlin Lighting GmbH")).toBeVisible();
+  await page.getByLabel("搜索 CRM 客户").fill("munich");
+  await expect(page.getByLabel("CRM 客户列表").getByText("Berlin Lighting GmbH")).toHaveCount(0);
+  await page.getByLabel("搜索 CRM 客户").fill("");
   await page.getByLabel("CRM 客户列表").getByRole("button", { name: "详情", exact: true }).click();
   await expect(page.getByLabel("客户详情").getByText("Berlin Lighting GmbH")).toBeVisible();
 
@@ -293,7 +298,7 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "跟进控制" })).toBeVisible();
   await expect(page.locator(".timeline").getByText("Berlin Lighting GmbH / 已人工发送开发信给 Anna Weber")).toBeVisible();
 
-  await page.getByLabel("客户状态").selectOption("interested");
+  await page.locator(".detailForm select[name='status']").selectOption("interested");
   await page.getByLabel("客户备注").fill("客户要求下周提供 FOB 报价。");
   await page.getByRole("button", { name: "保存客户详情" }).click();
   await expect(page.locator(".detailSummary strong").filter({ hasText: "有意向" })).toBeVisible();
@@ -311,6 +316,11 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   await expect(page.getByLabel("销售指标").locator(".metricTile").filter({ hasText: "客户回复" }).getByText("1")).toBeVisible();
   await page.getByLabel("关闭客户详情").click();
 
+  await page.getByLabel("客户状态筛选").selectOption("interested");
+  await expect(page.getByLabel("CRM 客户列表").getByText("Berlin Lighting GmbH")).toBeVisible();
+  await page.getByLabel("客户状态筛选").selectOption("quoting");
+  await expect(page.getByLabel("CRM 客户列表").getByText("Berlin Lighting GmbH")).toHaveCount(0);
+  await page.getByLabel("客户状态筛选").selectOption("all");
   await page.getByRole("button", { name: "删除" }).click();
   await expect(page.getByLabel("CRM 客户列表").getByText("Berlin Lighting GmbH")).toHaveCount(0);
 });

@@ -446,7 +446,22 @@ function CRMCustomerManager({
   onDelete: (leadId: string) => void;
   onOpenDetail: (leadId: string) => void;
 }) {
-  const crmLeads = leads.filter(isCrmLead).slice(0, 6);
+  const [crmSearch, setCrmSearch] = useState("");
+  const [crmStatusFilter, setCrmStatusFilter] = useState<LeadStatus | "all">("all");
+  const allCrmLeads = leads.filter(isCrmLead);
+  const normalizedSearch = crmSearch.trim().toLowerCase();
+  const crmLeads = allCrmLeads.filter((lead) => {
+    const matchesStatus = crmStatusFilter === "all" || lead.status === crmStatusFilter;
+    const matchesSearch =
+      !normalizedSearch ||
+      [
+        lead.company_name,
+        lead.website,
+        lead.target_market,
+        lead.buyer_profile ?? "",
+      ].some((value) => value.toLowerCase().includes(normalizedSearch));
+    return matchesStatus && matchesSearch;
+  });
 
   return (
     <section className="crmPanel" aria-labelledby="crm-customers-title">
@@ -455,7 +470,7 @@ function CRMCustomerManager({
           <p className="sectionLabel">CRM 客户管理</p>
           <h2 id="crm-customers-title">CRM 客户</h2>
         </div>
-        <span className="countBadge">{crmLeads.length} 个客户</span>
+        <span className="countBadge">{crmLeads.length} / {allCrmLeads.length} 个客户</span>
       </div>
       <div className="crmContent">
         <form className="crmForm" onSubmit={onCreate}>
@@ -498,8 +513,36 @@ function CRMCustomerManager({
           </button>
         </form>
         <div className="crmList" aria-label="CRM 客户列表">
+          <div className="crmTools" aria-label="CRM 筛选">
+            <label>
+              搜索 CRM 客户
+              <input
+                value={crmSearch}
+                onChange={(event) => setCrmSearch(event.currentTarget.value)}
+                placeholder="公司、官网、市场或客户类型"
+              />
+            </label>
+            <label>
+              客户状态筛选
+              <select
+                value={crmStatusFilter}
+                onChange={(event) => setCrmStatusFilter(event.currentTarget.value as LeadStatus | "all")}
+              >
+                <option value="all">全部状态</option>
+                {Object.entries(leadStatusLabel)
+                  .filter(([value]) => value !== "new")
+                  .map(([value, label]) => (
+                    <option key={value} value={value}>{label}</option>
+                  ))}
+              </select>
+            </label>
+          </div>
           {crmLeads.length === 0 ? (
-            <div className="emptyState">暂无 CRM 客户。你可以手动添加客户，或从搜索结果勾选线索保存到 CRM。</div>
+            <div className="emptyState">
+              {allCrmLeads.length === 0
+                ? "暂无 CRM 客户。你可以手动添加客户，或从搜索结果勾选线索保存到 CRM。"
+                : "没有匹配当前筛选条件的 CRM 客户。"}
+            </div>
           ) : (
             crmLeads.map((lead) => (
               <article className="crmItem" key={lead.id}>
