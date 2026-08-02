@@ -418,6 +418,37 @@ class LeadService:
         self.session.flush()
         return draft
 
+    def mark_email_draft_sent(
+        self,
+        *,
+        draft_id: str,
+        organization_id: str,
+        actor_user_id: str,
+    ) -> EmailDraft:
+        draft = self.get_email_draft(draft_id, organization_id)
+        if draft.status != EmailDraftStatus.READY_TO_SEND:
+            raise ValueError("only ready-to-send drafts can be marked sent")
+        lead = self.get_lead(draft.lead_id, organization_id)
+        contact = self._get_contact(draft.contact_id, draft.lead_id, organization_id)
+        sent_at = utcnow()
+        draft.status = EmailDraftStatus.SENT
+        draft.sent_by_user_id = actor_user_id
+        draft.sent_at = sent_at
+        lead.status = LeadStatus.CONTACTED
+        self.session.add(
+            FollowUpRecord(
+                organization_id=organization_id,
+                lead_id=lead.id,
+                actor_user_id=actor_user_id,
+                activity_type="email_sent",
+                content=f"已人工发送开发信给 {contact.name} <{contact.email}>：{draft.subject}",
+                next_follow_up_at=None,
+                created_at=sent_at,
+            )
+        )
+        self.session.flush()
+        return draft
+
     def _get_contact(self, contact_id: str, lead_id: str, organization_id: str) -> CRMContact:
         contact = self.session.scalar(
             select(CRMContact).where(

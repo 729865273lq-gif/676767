@@ -30,6 +30,7 @@ class LeadStatus(StrEnum):
 class EmailDraftStatus(StrEnum):
     PENDING_APPROVAL = "pending_approval"
     READY_TO_SEND = "ready_to_send"
+    SENT = "sent"
     REJECTED = "rejected"
 
 
@@ -147,6 +148,9 @@ class EmailDraft(Base):
     reviewed_by_user_id: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    sent_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     status: Mapped[EmailDraftStatus] = mapped_column(
         Enum(EmailDraftStatus, native_enum=False, length=30),
         default=EmailDraftStatus.PENDING_APPROVAL,
@@ -162,3 +166,4 @@ class EmailDraft(Base):
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

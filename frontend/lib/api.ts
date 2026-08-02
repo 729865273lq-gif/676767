@@ -107,7 +107,7 @@ export type ContactPayload = {
   is_primary?: boolean;
 };
 
-export type EmailDraftStatus = "pending_approval" | "ready_to_send" | "rejected";
+export type EmailDraftStatus = "pending_approval" | "ready_to_send" | "sent" | "rejected";
 
 export type EmailDraft = {
   id: string;
@@ -117,6 +117,7 @@ export type EmailDraft = {
   product_line_id: string;
   created_by_user_id: string | null;
   reviewed_by_user_id: string | null;
+  sent_by_user_id: string | null;
   status: EmailDraftStatus;
   subject: string;
   body: string;
@@ -125,6 +126,7 @@ export type EmailDraft = {
   created_at: string;
   updated_at: string;
   reviewed_at: string | null;
+  sent_at: string | null;
   lead_company_name: string;
   contact_name: string;
   contact_email: string;
@@ -294,5 +296,13 @@ export function reviewEmailDraft(
       method: "POST",
       body: JSON.stringify(payload),
     }
+  );
+}
+
+export function markEmailDraftSent(session: Session, draftId: string) {
+  return requestJson<EmailDraft>(
+    session,
+    `/discovery/organizations/${session.organization_id}/email-drafts/${draftId}/send`,
+    { method: "POST" }
   );
 }

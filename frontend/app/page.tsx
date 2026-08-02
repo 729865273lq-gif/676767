@@ -14,6 +14,7 @@ import {
   listEmailDrafts,
   listLeads,
   listProductLines,
+  markEmailDraftSent,
   reviewEmailDraft,
   startDiscovery,
   updateEmailDraft,
@@ -56,6 +57,7 @@ const leadStatusLabel: Record<LeadStatus, string> = {
 const emailDraftStatusLabel: Record<EmailDraft["status"], string> = {
   pending_approval: "待审批",
   ready_to_send: "待发送",
+  sent: "已发送",
   rejected: "已驳回",
 };
 
@@ -485,6 +487,7 @@ function ReviewQueue({
   onOpenDraft: (draftId: string) => void;
 }) {
   const pendingCount = drafts.filter((draft) => draft.status === "pending_approval").length;
+  const readyCount = drafts.filter((draft) => draft.status === "ready_to_send").length;
   return (
     <section className="reviewPanel" aria-labelledby="review-title">
       <div className="sectionHeader compact">
@@ -510,6 +513,7 @@ function ReviewQueue({
         ))
       )}
       <div className="reviewFooter"><span>人工审批已启用</span><strong>{pendingCount} 封草稿待审</strong></div>
+      <div className="reviewFooter"><span>待发送箱</span><strong>{readyCount} 封邮件待人工发送</strong></div>
     </section>
   );
 }
@@ -541,6 +545,7 @@ function ReviewDrawer({
   onClose,
   onSave,
   onApprove,
+  onMarkSent,
   onReject,
 }: {
   open: boolean;
@@ -550,6 +555,7 @@ function ReviewDrawer({
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
   onApprove: () => void;
+  onMarkSent: () => void;
   onReject: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   if (!open) return null;
@@ -567,7 +573,7 @@ function ReviewDrawer({
         ) : (
           <>
             <article className="draftCard">
-              <span className={draft.status === "ready_to_send" ? "status statusQualified" : "status statusPriority"}>
+              <span className={draft.status === "ready_to_send" || draft.status === "sent" ? "status statusQualified" : "status statusPriority"}>
                 {emailDraftStatusLabel[draft.status]}
               </span>
               <h3>{draft.lead_company_name}</h3>
@@ -595,6 +601,9 @@ function ReviewDrawer({
                 </button>
                 <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "pending_approval"} onClick={onApprove}>
                   {reviewing ? "审批中..." : "批准为待发送"}
+                </button>
+                <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "ready_to_send"} onClick={onMarkSent}>
+                  {reviewing ? "记录中..." : "标记已发送"}
                 </button>
               </div>
             </form>
@@ -1259,6 +1268,30 @@ export default function HomePage() {
     }
   }
 
+  async function markSelectedEmailDraftSent() {
+    if (!session || !selectedEmailDraft) return;
+    setReviewingEmailDraft(true);
+    setError("");
+    try {
+      const updated = await markEmailDraftSent(session, selectedEmailDraft.id);
+      setEmailDrafts((current) => current.map((draft) => (draft.id === updated.id ? updated : draft)));
+      setLeads((current) =>
+        current.map((lead) =>
+          lead.id === updated.lead_id ? { ...lead, status: "contacted" } : lead
+        )
+      );
+      setSelectedDraftId(updated.id);
+      if (leadDetail?.id === updated.lead_id) {
+        const refreshed = await getLeadDetail(session, updated.lead_id);
+        setLeadDetail(refreshed);
+      }
+    } catch (caught) {
+      handleApiFailure(caught, "无法标记开发信已发送");
+    } finally {
+      setReviewingEmailDraft(false);
+    }
+  }
+
   async function rejectEmailDraft(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!session || !selectedEmailDraft) return;
@@ -1381,6 +1414,7 @@ export default function HomePage() {
         onClose={() => setReviewOpen(false)}
         onSave={saveEmailDraft}
         onApprove={approveEmailDraft}
+        onMarkSent={markSelectedEmailDraftSent}
         onReject={rejectEmailDraft}
       />
     </main>

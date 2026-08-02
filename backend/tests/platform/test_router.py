@@ -390,6 +390,14 @@ def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
         headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
         json={"action": "approve"},
     )
+    sent_draft = client.post(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{email_draft_id}/send",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    sent_detail = client.get(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/detail",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
     follow_up = client.post(
         f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/follow-ups",  # type: ignore[attr-defined]
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
@@ -425,6 +433,16 @@ def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
     assert approved_draft.status_code == 200
     assert approved_draft.json()["status"] == EmailDraftStatus.READY_TO_SEND
     assert approved_draft.json()["reviewed_by_user_id"] == client.admin_id  # type: ignore[attr-defined]
+    assert sent_draft.status_code == 200
+    assert sent_draft.json()["status"] == EmailDraftStatus.SENT
+    assert sent_draft.json()["sent_by_user_id"] == client.member_id  # type: ignore[attr-defined]
+    assert sent_draft.json()["sent_at"] is not None
+    assert sent_detail.json()["status"] == LeadStatus.CONTACTED
+    assert any(
+        record["activity_type"] == "email_sent"
+        and "Edited subject" in record["content"]
+        for record in sent_detail.json()["follow_ups"]
+    )
     assert follow_up.status_code == 201
     assert detail.status_code == 200
     assert detail.json()["contacts"][0]["email"] == "anna@follow-up.example"

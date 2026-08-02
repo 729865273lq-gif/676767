@@ -138,6 +138,7 @@ class EmailDraftResponse(BaseModel):
     product_line_id: str
     created_by_user_id: str | None
     reviewed_by_user_id: str | None
+    sent_by_user_id: str | None
     status: EmailDraftStatus
     subject: str
     body: str
@@ -146,6 +147,7 @@ class EmailDraftResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     reviewed_at: datetime | None
+    sent_at: datetime | None
     lead_company_name: str
     contact_name: str
     contact_email: str
@@ -194,6 +196,7 @@ def email_draft_response(draft: EmailDraft, session: Session) -> EmailDraftRespo
         product_line_id=draft.product_line_id,
         created_by_user_id=draft.created_by_user_id,
         reviewed_by_user_id=draft.reviewed_by_user_id,
+        sent_by_user_id=draft.sent_by_user_id,
         status=draft.status,
         subject=draft.subject,
         body=draft.body,
@@ -202,6 +205,7 @@ def email_draft_response(draft: EmailDraft, session: Session) -> EmailDraftRespo
         created_at=draft.created_at,
         updated_at=draft.updated_at,
         reviewed_at=draft.reviewed_at,
+        sent_at=draft.sent_at,
         lead_company_name=lead.company_name if lead else "",
         contact_name=contact.name if contact else "",
         contact_email=contact.email if contact else "",
@@ -518,6 +522,33 @@ def review_email_draft(
             reviewer_user_id=principal.user_id,
             action=payload.action,
             rejection_reason=payload.rejection_reason,
+        )
+        session.commit()
+    except PermissionError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except LookupError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except ValueError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return email_draft_response(draft, session)
+
+
+@router.post("/organizations/{organization_id}/email-drafts/{draft_id}/send", response_model=EmailDraftResponse)
+def mark_email_draft_sent(
+    organization_id: str,
+    draft_id: str,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> EmailDraftResponse:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+        draft = LeadService(session).mark_email_draft_sent(
+            draft_id=draft_id,
+            organization_id=organization_id,
+            actor_user_id=principal.user_id,
         )
         session.commit()
     except PermissionError as error:

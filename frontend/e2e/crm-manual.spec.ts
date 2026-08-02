@@ -137,6 +137,7 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
         product_line_id: "product-1",
         created_by_user_id: "user-1",
         reviewed_by_user_id: null,
+        sent_by_user_id: null,
         status: "pending_approval",
         subject: "Industrial LED supply discussion for Berlin Lighting GmbH",
         body: "Dear Anna Weber,\\n\\nWe reviewed your public website and can share LED lighting details.",
@@ -151,6 +152,7 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
         created_at: "2026-08-01T08:00:00Z",
         updated_at: "2026-08-01T08:00:00Z",
         reviewed_at: null,
+        sent_at: null,
         lead_company_name: "Berlin Lighting GmbH",
         contact_name: "Anna Weber",
         contact_email: "anna@berlin-lighting.example",
@@ -179,6 +181,29 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
       reviewed_by_user_id: "user-1",
       reviewed_at: "2026-08-01T08:10:00Z",
     }));
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(emailDrafts[0]) });
+  });
+  await page.route(/\/discovery\/organizations\/org-1\/email-drafts\/draft-1\/send$/, async (route) => {
+    expect(route.request().method()).toBe("POST");
+    emailDrafts = emailDrafts.map((draft) => ({
+      ...draft,
+      status: "sent",
+      sent_by_user_id: "user-1",
+      sent_at: "2026-08-01T08:15:00Z",
+    }));
+    leads = leads.map((lead) => ({ ...lead, status: "contacted" }));
+    followUps = [
+      {
+        id: "follow-up-sent-1",
+        lead_id: "lead-manual-1",
+        actor_user_id: "user-1",
+        activity_type: "email_sent",
+        content: "已人工发送开发信给 Anna Weber <anna@berlin-lighting.example>：Updated LED introduction",
+        next_follow_up_at: null,
+        created_at: "2026-08-01T08:15:00Z",
+      },
+      ...followUps,
+    ];
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(emailDrafts[0]) });
   });
   await page.route(/\/discovery\/organizations\/org-1\/leads\/lead-manual-1\/follow-ups$/, async (route) => {
@@ -232,7 +257,11 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   await expect(page.getByLabel("邮件主题")).toHaveValue("Updated LED introduction");
   await page.getByRole("button", { name: "批准为待发送" }).click();
   await expect(page.locator(".draftCard .status", { hasText: "待发送" })).toBeVisible();
+  await page.getByRole("button", { name: "标记已发送" }).click();
+  await expect(page.locator(".draftCard .status", { hasText: "已发送" })).toBeVisible();
   await page.getByLabel("关闭审核队列").click();
+  await expect(page.locator(".detailSummary strong").filter({ hasText: "已联系" })).toBeVisible();
+  await expect(page.getByText("已人工发送开发信给 Anna Weber")).toBeVisible();
 
   await page.getByLabel("客户状态").selectOption("interested");
   await page.getByLabel("客户备注").fill("客户要求下周提供 FOB 报价。");
