@@ -213,6 +213,26 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   });
   await page.route(/\/discovery\/organizations\/org-1\/leads\/lead-manual-1\/follow-ups$/, async (route) => {
     const payload = route.request().postDataJSON();
+    if (payload.activity_type === "reply") {
+      expect(payload).toMatchObject({ content: "客户回复：请提供 500 套样品报价。" });
+      leads = leads.map((lead) => ({ ...lead, status: "interested" }));
+      followUps = [
+        {
+          id: "follow-up-reply-1",
+          lead_id: "lead-manual-1",
+          actor_user_id: "user-1",
+          activity_type: payload.activity_type,
+          content: payload.content,
+          next_follow_up_at: payload.next_follow_up_at,
+          created_at: "2026-08-01T09:00:00Z",
+          lead_company_name: "Berlin Lighting GmbH",
+          lead_status: "interested",
+        },
+        ...followUps,
+      ];
+      await route.fulfill({ contentType: "application/json", status: 201, body: JSON.stringify(followUps[0]) });
+      return;
+    }
     expect(payload).toMatchObject({ activity_type: "email", content: "已发送目录，等待客户确认采购数量。" });
     followUps = [
       {
@@ -223,7 +243,10 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
         content: payload.content,
         next_follow_up_at: payload.next_follow_up_at,
         created_at: "2026-08-01T08:00:00Z",
+        lead_company_name: "Berlin Lighting GmbH",
+        lead_status: "interested",
       },
+      ...followUps,
     ];
     await route.fulfill({ contentType: "application/json", status: 201, body: JSON.stringify(followUps[0]) });
   });
@@ -278,7 +301,14 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   await page.getByLabel("跟进类型").selectOption("email");
   await page.getByLabel("跟进内容").fill("已发送目录，等待客户确认采购数量。");
   await page.getByRole("button", { name: "添加跟进记录" }).click();
-  await expect(page.getByText("已发送目录，等待客户确认采购数量。")).toBeVisible();
+  await expect(page.locator(".followUpList").getByText("已发送目录，等待客户确认采购数量。")).toBeVisible();
+
+  await page.getByLabel("跟进类型").selectOption("reply");
+  await page.getByLabel("跟进内容").fill("客户回复：请提供 500 套样品报价。");
+  await page.getByRole("button", { name: "添加跟进记录" }).click();
+  await expect(page.getByLabel("客户回复列表").getByText("Berlin Lighting GmbH")).toBeVisible();
+  await expect(page.getByLabel("客户回复列表").getByText("客户回复：请提供 500 套样品报价。")).toBeVisible();
+  await expect(page.getByLabel("销售指标").locator(".metricTile").filter({ hasText: "客户回复" }).getByText("1")).toBeVisible();
   await page.getByLabel("关闭客户详情").click();
 
   await page.getByRole("button", { name: "删除" }).click();

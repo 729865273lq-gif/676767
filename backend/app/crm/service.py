@@ -210,12 +210,15 @@ class LeadService:
         content: str,
         next_follow_up_at: datetime | None,
     ) -> FollowUpRecord:
-        self.get_lead(lead_id, organization_id)
+        lead = self.get_lead(lead_id, organization_id)
+        normalized_activity_type = activity_type.strip() or "note"
+        if normalized_activity_type == "reply":
+            lead.status = LeadStatus.INTERESTED
         record = FollowUpRecord(
             organization_id=organization_id,
             lead_id=lead_id,
             actor_user_id=actor_user_id,
-            activity_type=activity_type.strip() or "note",
+            activity_type=normalized_activity_type,
             content=content.strip(),
             next_follow_up_at=next_follow_up_at,
         )

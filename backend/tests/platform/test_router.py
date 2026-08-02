@@ -475,6 +475,64 @@ def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
     assert deleted is None
 
 
+def test_reply_follow_up_marks_customer_interested() -> None:
+    client, factory = configured_client()
+    with factory.begin() as session:
+        product_line = ProductLine(organization_id=client.acme_id, name="Lighting")  # type: ignore[attr-defined]
+        session.add(product_line)
+        session.flush()
+        workflow_run = WorkflowRun(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            agent_id="manual_crm",
+            agent_version="1.0.0",
+            input_json={},
+            idempotency_key="reply-follow-up-route-run",
+        )
+        session.add(workflow_run)
+        session.flush()
+        lead = Lead(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            workflow_run_id=workflow_run.id,
+            product_line_id=product_line.id,
+            company_name="Reply GmbH",
+            website="https://reply.example",
+            canonical_domain="reply.example",
+            target_market="Germany",
+            buyer_profile="distributor",
+            score=70,
+            bucket=LeadBucket.NEEDS_ENRICHMENT,
+            status=LeadStatus.CONTACTED,
+            reasons=["人工添加客户"],
+            missing_signals=["联系人待补充"],
+        )
+        session.add(lead)
+        session.flush()
+        lead_id = lead.id
+
+    reply = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/follow-ups",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={
+            "activity_type": "reply",
+            "content": "Customer asked for a 500-unit quote.",
+        },
+    )
+    detail = client.get(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/detail",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    inbox = client.get(
+        f"/discovery/organizations/{client.acme_id}/follow-ups",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert reply.status_code == 201
+    assert reply.json()["activity_type"] == "reply"
+    assert detail.json()["status"] == LeadStatus.INTERESTED
+    assert inbox.json()[0]["lead_company_name"] == "Reply GmbH"
+    assert inbox.json()[0]["lead_status"] == LeadStatus.INTERESTED
+
+
 def test_register_creates_admin_and_login_issues_a_bearer_token() -> None:
     client, factory = configured_client()
     payload = {

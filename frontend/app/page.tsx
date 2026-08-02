@@ -100,12 +100,12 @@ function buildMetrics(leads: Lead[], drafts: EmailDraft[], followUps: FollowUpRe
   const newLeads = leads.filter((lead) => lead.status === "new").length;
   const priorityLeads = leads.filter((lead) => lead.bucket === "priority_recommendation").length;
   const pendingDrafts = drafts.filter((draft) => draft.status === "pending_approval").length;
-  const scheduledFollowUps = followUps.filter((record) => record.next_follow_up_at).length;
+  const replies = followUps.filter((record) => record.activity_type === "reply").length;
   return [
     { label: "新增线索", value: String(newLeads), note: "未入库客户线索", tone: "blue" },
     { label: "优先客户", value: String(priorityLeads), note: "证据评分优先推荐", tone: "cyan" },
     { label: "待审核邮件", value: String(pendingDrafts), note: "坚持人工审批", tone: "orange" },
-    { label: "待跟进", value: String(scheduledFollowUps), note: "已有下次跟进时间", tone: "green" },
+    { label: "客户回复", value: String(replies), note: "人工记录或邮箱同步", tone: "green" },
   ];
 }
 
@@ -615,6 +615,47 @@ function FollowUpTimeline({
   );
 }
 
+function InboxPanel({
+  records,
+  loading,
+  onRefresh,
+}: {
+  records: FollowUpRecord[];
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const replies = records.filter((record) => record.activity_type === "reply");
+  return (
+    <section className="timelinePanel" aria-labelledby="inbox-title">
+      <div className="sectionHeader compact">
+        <div>
+          <p className="sectionLabel">收件箱</p>
+          <h2 id="inbox-title">客户回复</h2>
+        </div>
+        <button className="iconTextButton" type="button" onClick={onRefresh}>刷新</button>
+      </div>
+      {loading ? (
+        <div className="emptyState">正在加载客户回复...</div>
+      ) : replies.length === 0 ? (
+        <div className="emptyState">暂无客户回复。你可以在客户详情页把回复内容记录为“客户回复”。</div>
+      ) : (
+        <div className="inboxList" aria-label="客户回复列表">
+          {replies.slice(0, 5).map((record) => (
+            <article className="inboxItem" key={record.id}>
+              <div>
+                <strong>{record.lead_company_name ?? "客户"}</strong>
+                <time>{formatDateTime(record.created_at)}</time>
+              </div>
+              <p>{record.content}</p>
+              <small>{record.lead_status ? leadStatusLabel[record.lead_status] : "未同步状态"}</small>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ReviewDrawer({
   open,
   draft,
@@ -717,6 +758,7 @@ function formatTimelineTime(value: string | null) {
 
 function followUpActivityLabel(activityType: string) {
   if (activityType === "email_sent") return "开发信已发送";
+  if (activityType === "reply") return "客户回复";
   if (activityType === "email") return "邮件跟进";
   if (activityType === "call") return "电话跟进";
   if (activityType === "meeting") return "会议跟进";
@@ -902,6 +944,7 @@ function CustomerDetailDrawer({
                 跟进类型
                 <select name="activity_type" defaultValue="note">
                   <option value="note">备注</option>
+                  <option value="reply">客户回复</option>
                   <option value="email">邮件</option>
                   <option value="call">电话</option>
                   <option value="meeting">会议</option>
@@ -1356,6 +1399,8 @@ export default function HomePage() {
       });
       const refreshed = await getLeadDetail(session, leadDetail.id);
       setLeadDetail(refreshed);
+      setLeads((current) => current.map((lead) => (lead.id === refreshed.id ? refreshed : lead)));
+      await refreshFollowUps();
       event.currentTarget.reset();
     } catch (caught) {
       handleApiFailure(caught, "无法添加跟进记录");
@@ -1509,6 +1554,11 @@ export default function HomePage() {
               loading={loadingEmailDrafts}
               onOpen={() => openEmailDraftQueue()}
               onOpenDraft={openEmailDraftQueue}
+            />
+            <InboxPanel
+              records={followUps}
+              loading={loadingFollowUps}
+              onRefresh={refreshFollowUps}
             />
             <FollowUpTimeline
               records={followUps}
