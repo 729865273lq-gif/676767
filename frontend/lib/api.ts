@@ -131,6 +131,18 @@ export type WebsiteInquiry = {
   converted_at: string | null;
 };
 
+export type WebsiteInquiryPayload = {
+  product_line_id: string;
+  company_name: string;
+  contact_name: string;
+  email: string;
+  phone?: string;
+  website?: string;
+  target_market?: string;
+  message: string;
+  source_url?: string;
+};
+
 export type WebsiteInquiryConversion = {
   inquiry: WebsiteInquiry;
   lead: LeadDetail;
@@ -317,6 +329,26 @@ export function convertWebsiteInquiry(session: Session, inquiryId: string) {
     `/discovery/organizations/${session.organization_id}/website-inquiries/${inquiryId}/convert`,
     { method: "POST" }
   );
+}
+
+export async function submitWebsiteInquiry(organizationId: string, payload: WebsiteInquiryPayload) {
+  const response = await fetch(`${apiUrl}/discovery/public/organizations/${organizationId}/website-inquiries`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail =
+      typeof data === "object" &&
+      data !== null &&
+      "detail" in data &&
+      typeof data.detail === "string"
+        ? data.detail
+        : "Request failed";
+    throw new ApiError(detail, response.status);
+  }
+  return data as WebsiteInquiry;
 }
 
 export function updateEmailDraft(

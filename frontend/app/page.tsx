@@ -588,6 +588,7 @@ function CRMCustomerManager({
 function WebsiteInquiryPanel({
   inquiries,
   productLines,
+  organizationId,
   loading,
   convertingInquiryId,
   statusFilter,
@@ -597,6 +598,7 @@ function WebsiteInquiryPanel({
 }: {
   inquiries: WebsiteInquiry[];
   productLines: ProductLine[];
+  organizationId: string;
   loading: boolean;
   convertingInquiryId: string;
   statusFilter: WebsiteInquiryStatus | "all";
@@ -606,6 +608,13 @@ function WebsiteInquiryPanel({
 }) {
   const productNameById = new Map(productLines.map((productLine) => [productLine.id, productLine.name]));
   const newCount = inquiries.filter((inquiry) => inquiry.status === "new").length;
+  const [formOrigin, setFormOrigin] = useState("");
+  useEffect(() => {
+    setFormOrigin(window.location.origin);
+  }, []);
+  const formBaseUrl = formOrigin ? `${formOrigin}/inquiry` : "/inquiry";
+  const inquiryFormUrl = (productLine: ProductLine) =>
+    `${formBaseUrl}?organization_id=${encodeURIComponent(organizationId)}&product_line_id=${encodeURIComponent(productLine.id)}&product=${encodeURIComponent(productLine.name)}`;
 
   return (
     <section className="inquiryPanel" aria-labelledby="website-inquiry-title">
@@ -635,6 +644,33 @@ function WebsiteInquiryPanel({
       <div className="inquirySummary">
         <strong>{newCount}</strong>
         <span>条新询盘可转入 CRM。未来独立站表单提交后，会先进入这里，由后台人工确认再转客户。</span>
+      </div>
+      <div className="inquiryLinkList" aria-label="独立站表单链接">
+        {productLines.length === 0 ? (
+          <div className="emptyState inquiryEmpty">先创建产品线，再生成对应的公开询盘表单链接。</div>
+        ) : (
+          productLines.map((productLine) => {
+            const url = inquiryFormUrl(productLine);
+            return (
+              <article className="inquiryLinkItem" key={productLine.id}>
+                <div>
+                  <strong>{productLine.name}</strong>
+                  <span>{url}</span>
+                </div>
+                <div>
+                  <a className="textButton" href={url} target="_blank" rel="noreferrer">打开表单</a>
+                  <button
+                    className="textButton"
+                    type="button"
+                    onClick={() => void navigator.clipboard.writeText(url)}
+                  >
+                    复制链接
+                  </button>
+                </div>
+              </article>
+            );
+          })
+        )}
       </div>
       {loading ? (
         <div className="emptyState inquiryEmpty">正在加载独立站询盘...</div>
@@ -1746,6 +1782,7 @@ export default function HomePage() {
           <WebsiteInquiryPanel
             inquiries={websiteInquiries}
             productLines={productLines}
+            organizationId={session.organization_id}
             loading={loadingWebsiteInquiries}
             convertingInquiryId={convertingInquiryId}
             statusFilter={inquiryStatusFilter}
