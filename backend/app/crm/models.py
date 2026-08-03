@@ -34,6 +34,12 @@ class EmailDraftStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class WebsiteInquiryStatus(StrEnum):
+    NEW = "new"
+    CONVERTED = "converted"
+    DISMISSED = "dismissed"
+
+
 class Lead(Base):
     __tablename__ = "leads"
     __table_args__ = (UniqueConstraint("organization_id", "canonical_domain", name="uq_lead_domain"),)
@@ -167,3 +173,34 @@ class EmailDraft(Base):
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WebsiteInquiry(Base):
+    __tablename__ = "website_inquiries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product_line_id: Mapped[str | None] = mapped_column(
+        ForeignKey("product_lines.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    lead_id: Mapped[str | None] = mapped_column(
+        ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    status: Mapped[WebsiteInquiryStatus] = mapped_column(
+        Enum(WebsiteInquiryStatus, native_enum=False, length=30),
+        default=WebsiteInquiryStatus.NEW,
+        nullable=False,
+        index=True,
+    )
+    company_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    contact_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    email: Mapped[str] = mapped_column(String(320), nullable=False)
+    phone: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    website: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
+    target_market: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    message: Mapped[str] = mapped_column(String(4_000), nullable=False)
+    source_url: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    converted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

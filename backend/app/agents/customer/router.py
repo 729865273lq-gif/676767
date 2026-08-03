@@ -19,6 +19,8 @@ from app.crm.models import (
     LeadBucket,
     LeadEvidence,
     LeadStatus,
+    WebsiteInquiry,
+    WebsiteInquiryStatus,
 )
 from app.crm.service import LeadService
 from app.platform.product_lines import ProductLineNotFound, ProductLineService
@@ -163,6 +165,41 @@ class LeadDetailResponse(LeadResponse):
     follow_ups: list[FollowUpResponse]
 
 
+class WebsiteInquiryRequest(BaseModel):
+    product_line_id: str = Field(min_length=1, max_length=36)
+    company_name: str = Field(min_length=1, max_length=300)
+    contact_name: str = Field(min_length=1, max_length=200)
+    email: str = Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    phone: str = Field(default="", max_length=80)
+    website: str = Field(default="", max_length=1_000)
+    target_market: str = Field(default="", max_length=120)
+    message: str = Field(min_length=1, max_length=4_000)
+    source_url: str = Field(default="", max_length=1_000)
+
+
+class WebsiteInquiryResponse(BaseModel):
+    id: str
+    organization_id: str
+    product_line_id: str | None
+    lead_id: str | None
+    status: WebsiteInquiryStatus
+    company_name: str
+    contact_name: str
+    email: str
+    phone: str
+    website: str
+    target_market: str
+    message: str
+    source_url: str
+    created_at: datetime
+    converted_at: datetime | None
+
+
+class WebsiteInquiryConversionResponse(BaseModel):
+    inquiry: WebsiteInquiryResponse
+    lead: LeadDetailResponse
+
+
 def follow_up_response(record: FollowUpRecord) -> FollowUpResponse:
     return FollowUpResponse(
         id=record.id,
@@ -250,6 +287,70 @@ def lead_response(lead: Lead, evidence: list[LeadEvidence]) -> LeadResponse:
             for item in evidence
         ],
     )
+
+
+def lead_detail_response(lead: Lead, service: LeadService, organization_id: str) -> LeadDetailResponse:
+    response = lead_response(lead, service.evidence_for_lead(lead.id)).model_dump()
+    response["contacts"] = [
+        contact_response(contact)
+        for contact in service.contacts_for_lead(lead.id, organization_id)
+    ]
+    response["follow_ups"] = [
+        follow_up_response(record)
+        for record in service.follow_ups_for_lead(lead.id, organization_id)
+    ]
+    return LeadDetailResponse(**response)
+
+
+def website_inquiry_response(inquiry: WebsiteInquiry) -> WebsiteInquiryResponse:
+    return WebsiteInquiryResponse(
+        id=inquiry.id,
+        organization_id=inquiry.organization_id,
+        product_line_id=inquiry.product_line_id,
+        lead_id=inquiry.lead_id,
+        status=inquiry.status,
+        company_name=inquiry.company_name,
+        contact_name=inquiry.contact_name,
+        email=inquiry.email,
+        phone=inquiry.phone,
+        website=inquiry.website,
+        target_market=inquiry.target_market,
+        message=inquiry.message,
+        source_url=inquiry.source_url,
+        created_at=inquiry.created_at,
+        converted_at=inquiry.converted_at,
+    )
+
+
+@router.post(
+    "/public/organizations/{organization_id}/website-inquiries",
+    response_model=WebsiteInquiryResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def submit_website_inquiry(
+    organization_id: str,
+    payload: WebsiteInquiryRequest,
+    session: Session = Depends(get_session),
+) -> WebsiteInquiryResponse:
+    try:
+        ProductLineService(session).get_product_line(payload.product_line_id, organization_id)
+        inquiry = LeadService(session).create_website_inquiry(
+            organization_id=organization_id,
+            product_line_id=payload.product_line_id,
+            company_name=payload.company_name,
+            contact_name=payload.contact_name,
+            email=payload.email,
+            phone=payload.phone,
+            website=payload.website,
+            target_market=payload.target_market,
+            message=payload.message,
+            source_url=payload.source_url,
+        )
+        session.commit()
+    except ProductLineNotFound as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    return website_inquiry_response(inquiry)
 
 
 @router.post(
@@ -363,18 +464,10 @@ def get_lead_detail(
     service = LeadService(session)
     try:
         lead = service.get_lead(lead_id, organization_id)
-        response = lead_response(lead, service.evidence_for_lead(lead.id)).model_dump()
-        response["contacts"] = [
-            contact_response(contact)
-            for contact in service.contacts_for_lead(lead.id, organization_id)
-        ]
-        response["follow_ups"] = [
-            follow_up_response(record)
-            for record in service.follow_ups_for_lead(lead.id, organization_id)
-        ]
+        response = lead_detail_response(lead, service, organization_id)
     except LookupError as error:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
-    return LeadDetailResponse(**response)
+    return response
 
 
 @router.post(
@@ -488,6 +581,63 @@ def list_email_drafts(
             status_filter=status_filter,
         )
     ]
+
+
+@router.get(
+    "/organizations/{organization_id}/website-inquiries",
+    response_model=list[WebsiteInquiryResponse],
+)
+def list_website_inquiries(
+    organization_id: str,
+    status_filter: WebsiteInquiryStatus | None = None,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> list[WebsiteInquiryResponse]:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+    except PermissionError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    return [
+        website_inquiry_response(inquiry)
+        for inquiry in LeadService(session).list_website_inquiries(
+            organization_id=organization_id,
+            status_filter=status_filter,
+        )
+    ]
+
+
+@router.post(
+    "/organizations/{organization_id}/website-inquiries/{inquiry_id}/convert",
+    response_model=WebsiteInquiryConversionResponse,
+)
+def convert_website_inquiry(
+    organization_id: str,
+    inquiry_id: str,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> WebsiteInquiryConversionResponse:
+    service = LeadService(session)
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+        inquiry, lead = service.convert_website_inquiry(
+            inquiry_id=inquiry_id,
+            organization_id=organization_id,
+            actor_user_id=principal.user_id,
+        )
+        session.commit()
+    except PermissionError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except LookupError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except ValueError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+    return WebsiteInquiryConversionResponse(
+        inquiry=website_inquiry_response(inquiry),
+        lead=lead_detail_response(lead, service, organization_id),
+    )
 
 
 @router.patch("/organizations/{organization_id}/email-drafts/{draft_id}", response_model=EmailDraftResponse)

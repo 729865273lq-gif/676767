@@ -8,7 +8,15 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.main import create_app
-from app.crm.models import CRMContact, EmailDraftStatus, Lead, LeadBucket, LeadEvidence, LeadStatus
+from app.crm.models import (
+    CRMContact,
+    EmailDraftStatus,
+    Lead,
+    LeadBucket,
+    LeadEvidence,
+    LeadStatus,
+    WebsiteInquiryStatus,
+)
 from app.platform.models import ConnectorCredential, MembershipRole, Organization, ProductLine, User, UserMembership
 from app.shared.config import Settings
 from app.shared.db import Base
@@ -310,6 +318,71 @@ def test_manual_customer_routes_create_and_delete_within_the_organization() -> N
     assert cross_tenant.status_code == 403
     assert deleted.status_code == 204
     assert missing_after_delete.status_code == 404
+
+
+def test_website_inquiry_api_accepts_public_submission_and_converts_to_customer() -> None:
+    client, _ = configured_client()
+    with client.app.state.session_factory.begin() as session:
+        product_line = ProductLine(organization_id=client.acme_id, name="Lighting")  # type: ignore[attr-defined]
+        other_product_line = ProductLine(organization_id=client.globex_id, name="Other")  # type: ignore[attr-defined]
+        session.add_all([product_line, other_product_line])
+        session.flush()
+        product_line_id = product_line.id
+        other_product_line_id = other_product_line.id
+
+    payload = {
+        "product_line_id": product_line_id,
+        "company_name": "Inquiry Buyer Ltd",
+        "contact_name": "Mina Lee",
+        "email": "mina@buyer.example",
+        "phone": "+82 10 5555 1234",
+        "target_market": "Korea",
+        "message": "Need quotation for 300 sample units and lead time.",
+        "source_url": "https://brand.example/products/lighting",
+    }
+    submitted = client.post(
+        f"/discovery/public/organizations/{client.acme_id}/website-inquiries",  # type: ignore[attr-defined]
+        json=payload,
+    )
+    invalid_product = client.post(
+        f"/discovery/public/organizations/{client.acme_id}/website-inquiries",  # type: ignore[attr-defined]
+        json={**payload, "product_line_id": other_product_line_id},
+    )
+    listed = client.get(
+        f"/discovery/organizations/{client.acme_id}/website-inquiries?status_filter=new",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    cross_tenant = client.get(
+        f"/discovery/organizations/{client.globex_id}/website-inquiries",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    inquiry_id = submitted.json()["id"]
+    converted = client.post(
+        f"/discovery/organizations/{client.acme_id}/website-inquiries/{inquiry_id}/convert",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    duplicate_convert = client.post(
+        f"/discovery/organizations/{client.acme_id}/website-inquiries/{inquiry_id}/convert",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert submitted.status_code == 201
+    assert submitted.json()["status"] == WebsiteInquiryStatus.NEW
+    assert submitted.json()["lead_id"] is None
+    assert invalid_product.status_code == 404
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == inquiry_id
+    assert cross_tenant.status_code == 403
+    assert converted.status_code == 200
+    assert converted.json()["inquiry"]["status"] == WebsiteInquiryStatus.CONVERTED
+    assert converted.json()["inquiry"]["lead_id"] == converted.json()["lead"]["id"]
+    assert converted.json()["lead"]["status"] == LeadStatus.INTERESTED
+    assert converted.json()["lead"]["website"] == "https://buyer.example"
+    assert converted.json()["lead"]["contacts"][0]["email"] == "mina@buyer.example"
+    assert converted.json()["lead"]["contacts"][0]["is_primary"] is True
+    assert converted.json()["lead"]["follow_ups"][0]["activity_type"] == "inquiry"
+    assert "300 sample units" in converted.json()["lead"]["follow_ups"][0]["content"]
+    assert duplicate_convert.status_code == 409
 
 
 def test_customer_detail_routes_update_status_and_record_follow_up() -> None:

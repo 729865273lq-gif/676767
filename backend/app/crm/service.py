@@ -16,6 +16,8 @@ from app.crm.models import (
     LeadBucket,
     LeadEvidence,
     LeadStatus,
+    WebsiteInquiry,
+    WebsiteInquiryStatus,
 )
 from app.crm.scoring import LeadQualification
 from app.platform.models import ProductLine, utcnow
@@ -257,6 +259,114 @@ class LeadService:
             .limit(limit)
         )
         return list(self.session.execute(statement).all())
+
+    def create_website_inquiry(
+        self,
+        *,
+        organization_id: str,
+        product_line_id: str,
+        company_name: str,
+        contact_name: str,
+        email: str,
+        phone: str,
+        website: str,
+        target_market: str,
+        message: str,
+        source_url: str,
+    ) -> WebsiteInquiry:
+        inquiry = WebsiteInquiry(
+            organization_id=organization_id,
+            product_line_id=product_line_id,
+            company_name=company_name.strip(),
+            contact_name=contact_name.strip(),
+            email=email.strip(),
+            phone=phone.strip(),
+            website=website.strip(),
+            target_market=target_market.strip(),
+            message=message.strip(),
+            source_url=source_url.strip(),
+        )
+        self.session.add(inquiry)
+        self.session.flush()
+        return inquiry
+
+    def list_website_inquiries(
+        self,
+        *,
+        organization_id: str,
+        status_filter: WebsiteInquiryStatus | None = None,
+    ) -> list[WebsiteInquiry]:
+        statement = select(WebsiteInquiry).where(WebsiteInquiry.organization_id == organization_id)
+        if status_filter is not None:
+            statement = statement.where(WebsiteInquiry.status == status_filter)
+        return list(
+            self.session.scalars(
+                statement.order_by(WebsiteInquiry.status, WebsiteInquiry.created_at.desc())
+            )
+        )
+
+    def get_website_inquiry(self, inquiry_id: str, organization_id: str) -> WebsiteInquiry:
+        inquiry = self.session.scalar(
+            select(WebsiteInquiry).where(
+                WebsiteInquiry.id == inquiry_id,
+                WebsiteInquiry.organization_id == organization_id,
+            )
+        )
+        if inquiry is None:
+            raise LookupError("website inquiry not found")
+        return inquiry
+
+    def convert_website_inquiry(
+        self,
+        *,
+        inquiry_id: str,
+        organization_id: str,
+        actor_user_id: str,
+    ) -> tuple[WebsiteInquiry, Lead]:
+        inquiry = self.get_website_inquiry(inquiry_id, organization_id)
+        if inquiry.status != WebsiteInquiryStatus.NEW:
+            raise ValueError("only new website inquiries can be converted")
+        if inquiry.product_line_id is None:
+            raise ValueError("product line is required to convert inquiry")
+
+        website = inquiry.website.strip() or website_from_email(inquiry.email)
+        lead = self.create_manual_lead(
+            organization_id=organization_id,
+            product_line_id=inquiry.product_line_id,
+            company_name=inquiry.company_name,
+            website=website,
+            target_market=inquiry.target_market or "Unspecified",
+            buyer_profile="Website inquiry",
+            notes=inquiry.message,
+            actor_user_id=actor_user_id,
+        )
+        lead.status = LeadStatus.INTERESTED
+        self.add_contact(
+            organization_id=organization_id,
+            lead_id=lead.id,
+            name=inquiry.contact_name,
+            title="",
+            email=inquiry.email,
+            phone=inquiry.phone,
+            linkedin_url="",
+            whatsapp="",
+            is_primary=True,
+        )
+        self.session.add(
+            FollowUpRecord(
+                organization_id=organization_id,
+                lead_id=lead.id,
+                actor_user_id=actor_user_id,
+                activity_type="inquiry",
+                content=f"Website inquiry: {inquiry.message}",
+                next_follow_up_at=None,
+            )
+        )
+        inquiry.status = WebsiteInquiryStatus.CONVERTED
+        inquiry.lead_id = lead.id
+        inquiry.converted_at = utcnow()
+        self.session.flush()
+        return inquiry, lead
 
     def add_contact(
         self,
@@ -502,6 +612,13 @@ def normalize_website(website: str) -> str:
         value = f"https://{value}"
     canonical_domain(value)
     return value
+
+
+def website_from_email(email: str) -> str:
+    parts = email.strip().rsplit("@", 1)
+    if len(parts) != 2 or not parts[1].strip():
+        raise ValueError("website or valid email domain is required")
+    return normalize_website(parts[1])
 
 
 def build_email_body(
