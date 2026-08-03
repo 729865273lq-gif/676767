@@ -87,14 +87,26 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   });
   let contacts: Array<Record<string, unknown>> = [];
   let followUps: Array<Record<string, unknown>> = [];
+  let tasks: Array<Record<string, unknown>> = [];
   let emailDrafts: Array<Record<string, unknown>> = [];
   await page.route(/\/discovery\/organizations\/org-1\/follow-ups/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(followUps) });
   });
+  await page.route(/\/discovery\/organizations\/org-1\/follow-up-tasks(?:\?.*)?$/, async (route) => {
+    const url = new URL(route.request().url());
+    const statusFilter = url.searchParams.get("status_filter");
+    const filteredTasks = statusFilter ? tasks.filter((task) => task.status === statusFilter) : tasks;
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(filteredTasks) });
+  });
   await page.route(/\/discovery\/organizations\/org-1\/leads\/lead-manual-1\/detail$/, async (route) => {
     await route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ ...leads[0], contacts, follow_ups: followUps }),
+      body: JSON.stringify({
+        ...leads[0],
+        contacts,
+        follow_ups: followUps,
+        follow_up_tasks: tasks.filter((task) => task.lead_id === "lead-manual-1"),
+      }),
     });
   });
   await page.route(/\/discovery\/organizations\/org-1\/leads\/lead-manual-1\/contacts$/, async (route) => {
@@ -252,6 +264,58 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
     await route.fulfill({ contentType: "application/json", status: 201, body: JSON.stringify(followUps[0]) });
   });
 
+  await page.route(/\/discovery\/organizations\/org-1\/leads\/lead-manual-1\/follow-up-tasks$/, async (route) => {
+    const payload = route.request().postDataJSON();
+    expect(payload).toMatchObject({
+      title: "Prepare 500 sample FOB quote",
+      task_type: "quote",
+      quote_status: "preparing_quote",
+    });
+    leads = leads.map((lead) => ({ ...lead, status: "quoting" }));
+    tasks = [
+      {
+        id: "task-1",
+        lead_id: "lead-manual-1",
+        actor_user_id: "user-1",
+        title: payload.title,
+        task_type: payload.task_type,
+        quote_status: payload.quote_status,
+        due_at: payload.due_at,
+        status: "open",
+        completed_at: null,
+        created_at: "2026-08-01T09:30:00Z",
+        updated_at: "2026-08-01T09:30:00Z",
+        lead_company_name: "Berlin Lighting GmbH",
+        lead_status: "quoting",
+      },
+      ...tasks,
+    ];
+    await route.fulfill({ contentType: "application/json", status: 201, body: JSON.stringify(tasks[0]) });
+  });
+  await page.route(/\/discovery\/organizations\/org-1\/follow-up-tasks\/task-1\/complete$/, async (route) => {
+    expect(route.request().method()).toBe("POST");
+    tasks = tasks.map((task) =>
+      task.id === "task-1"
+        ? { ...task, status: "done", completed_at: "2026-08-01T10:00:00Z", updated_at: "2026-08-01T10:00:00Z" }
+        : task
+    );
+    followUps = [
+      {
+        id: "follow-up-task-done-1",
+        lead_id: "lead-manual-1",
+        actor_user_id: "user-1",
+        activity_type: "task_done",
+        content: "Completed task: Prepare 500 sample FOB quote",
+        next_follow_up_at: null,
+        created_at: "2026-08-01T10:00:00Z",
+        lead_company_name: "Berlin Lighting GmbH",
+        lead_status: "quoting",
+      },
+      ...followUps,
+    ];
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(tasks.find((task) => task.id === "task-1")) });
+  });
+
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "CRM 客户" })).toBeVisible();
 
@@ -303,6 +367,17 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   await page.getByLabel("客户备注").fill("客户要求下周提供 FOB 报价。");
   await page.getByRole("button", { name: "保存客户详情" }).click();
   await expect(page.locator(".detailSummary strong").filter({ hasText: "有意向" })).toBeVisible();
+
+  await page.locator(".taskForm select[name='task_type']").selectOption("quote");
+  await page.locator(".taskForm select[name='quote_status']").selectOption("preparing_quote");
+  await page.locator(".taskForm textarea[name='title']").fill("Prepare 500 sample FOB quote");
+  await page.locator(".taskForm button[type='submit']").click();
+  const customerDrawer = page.getByLabel("客户详情", { exact: true });
+  await expect(customerDrawer.locator(".taskList").getByText("Prepare 500 sample FOB quote")).toBeVisible();
+  await expect(page.locator(".detailSummary strong").filter({ hasText: "报价中" })).toBeVisible();
+  await customerDrawer.locator(".taskList").getByRole("button", { name: "标记完成" }).click();
+  await expect(customerDrawer.locator(".taskList").getByRole("button", { name: "已完成" })).toBeVisible();
+  await expect(page.locator(".followUpList").getByText("Completed task: Prepare 500 sample FOB quote")).toBeVisible();
 
   await page.getByLabel("跟进类型").selectOption("email");
   await page.getByLabel("跟进内容").fill("已发送目录，等待客户确认采购数量。");

@@ -12,6 +12,8 @@ from app.crm.models import (
     EmailDraft,
     EmailDraftStatus,
     FollowUpRecord,
+    FollowUpTask,
+    FollowUpTaskStatus,
     Lead,
     LeadBucket,
     LeadEvidence,
@@ -177,6 +179,7 @@ class LeadService:
         self.session.execute(delete(EmailDraft).where(EmailDraft.lead_id == lead.id))
         self.session.execute(delete(CRMContact).where(CRMContact.lead_id == lead.id))
         self.session.execute(delete(FollowUpRecord).where(FollowUpRecord.lead_id == lead.id))
+        self.session.execute(delete(FollowUpTask).where(FollowUpTask.lead_id == lead.id))
         self.session.execute(delete(LeadEvidence).where(LeadEvidence.lead_id == lead.id))
         self.session.delete(lead)
         self.session.flush()
@@ -263,6 +266,106 @@ class LeadService:
             .limit(limit)
         )
         return list(self.session.execute(statement).all())
+
+    def create_follow_up_task(
+        self,
+        *,
+        organization_id: str,
+        lead_id: str,
+        actor_user_id: str,
+        title: str,
+        task_type: str,
+        quote_status: str,
+        due_at: datetime | None,
+    ) -> FollowUpTask:
+        lead = self.get_lead(lead_id, organization_id)
+        normalized_task_type = task_type.strip() or "follow_up"
+        normalized_quote_status = quote_status.strip()
+        if normalized_task_type == "quote" or normalized_quote_status:
+            lead.status = LeadStatus.QUOTING
+        task = FollowUpTask(
+            organization_id=organization_id,
+            lead_id=lead.id,
+            actor_user_id=actor_user_id,
+            title=title.strip(),
+            task_type=normalized_task_type,
+            quote_status=normalized_quote_status,
+            due_at=due_at,
+        )
+        self.session.add(task)
+        self.session.flush()
+        return task
+
+    def follow_up_tasks_for_lead(self, lead_id: str, organization_id: str) -> list[FollowUpTask]:
+        self.get_lead(lead_id, organization_id)
+        return list(
+            self.session.scalars(
+                select(FollowUpTask)
+                .where(
+                    FollowUpTask.lead_id == lead_id,
+                    FollowUpTask.organization_id == organization_id,
+                )
+                .order_by(
+                    FollowUpTask.status,
+                    FollowUpTask.due_at.is_(None),
+                    FollowUpTask.due_at,
+                    FollowUpTask.created_at.desc(),
+                )
+            )
+        )
+
+    def list_follow_up_tasks(
+        self,
+        *,
+        organization_id: str,
+        status_filter: FollowUpTaskStatus | None = FollowUpTaskStatus.OPEN,
+        limit: int = 20,
+    ) -> list[tuple[FollowUpTask, Lead]]:
+        statement = (
+            select(FollowUpTask, Lead)
+            .join(Lead, Lead.id == FollowUpTask.lead_id)
+            .where(FollowUpTask.organization_id == organization_id, Lead.organization_id == organization_id)
+        )
+        if status_filter is not None:
+            statement = statement.where(FollowUpTask.status == status_filter)
+        statement = statement.order_by(
+            FollowUpTask.status,
+            FollowUpTask.due_at.is_(None),
+            FollowUpTask.due_at,
+            FollowUpTask.created_at.desc(),
+        ).limit(limit)
+        return list(self.session.execute(statement).all())
+
+    def complete_follow_up_task(
+        self,
+        *,
+        organization_id: str,
+        task_id: str,
+        actor_user_id: str,
+    ) -> FollowUpTask:
+        task = self.session.scalar(
+            select(FollowUpTask).where(
+                FollowUpTask.id == task_id,
+                FollowUpTask.organization_id == organization_id,
+            )
+        )
+        if task is None:
+            raise LookupError("follow-up task not found")
+        self.get_lead(task.lead_id, organization_id)
+        task.status = FollowUpTaskStatus.DONE
+        task.completed_at = utcnow()
+        self.session.add(
+            FollowUpRecord(
+                organization_id=organization_id,
+                lead_id=task.lead_id,
+                actor_user_id=actor_user_id,
+                activity_type="task_done",
+                content=f"Completed task: {task.title}",
+                next_follow_up_at=None,
+            )
+        )
+        self.session.flush()
+        return task
 
     def create_website_inquiry(
         self,

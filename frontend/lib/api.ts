@@ -107,6 +107,24 @@ export type FollowUpRecord = {
   lead_status?: LeadStatus;
 };
 
+export type FollowUpTaskStatus = "open" | "done";
+
+export type FollowUpTask = {
+  id: string;
+  lead_id: string;
+  actor_user_id: string | null;
+  title: string;
+  task_type: string;
+  quote_status: string;
+  due_at: string | null;
+  status: FollowUpTaskStatus;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  lead_company_name?: string;
+  lead_status?: LeadStatus;
+};
+
 export type ContactRecord = {
   id: string;
   lead_id: string;
@@ -123,6 +141,7 @@ export type ContactRecord = {
 export type LeadDetail = Lead & {
   contacts: ContactRecord[];
   follow_ups: FollowUpRecord[];
+  follow_up_tasks: FollowUpTask[];
 };
 
 export type ManualLeadPayload = {
@@ -144,6 +163,13 @@ export type FollowUpPayload = {
   activity_type: string;
   content: string;
   next_follow_up_at?: string | null;
+};
+
+export type FollowUpTaskPayload = {
+  title: string;
+  task_type?: string;
+  quote_status?: string;
+  due_at?: string | null;
 };
 
 export type ContactPayload = {
@@ -359,10 +385,37 @@ export function createFollowUp(session: Session, leadId: string, payload: Follow
   );
 }
 
+export function createFollowUpTask(session: Session, leadId: string, payload: FollowUpTaskPayload) {
+  return requestJson<FollowUpTask>(
+    session,
+    `/discovery/organizations/${session.organization_id}/leads/${leadId}/follow-up-tasks`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
 export function listFollowUps(session: Session, limit = 20) {
   return requestJson<FollowUpRecord[]>(
     session,
     `/discovery/organizations/${session.organization_id}/follow-ups?limit=${limit}`
+  );
+}
+
+export function listFollowUpTasks(session: Session, statusFilter: FollowUpTaskStatus | "all" = "open", limit = 20) {
+  const statusQuery = statusFilter === "all" ? "" : `status_filter=${encodeURIComponent(statusFilter)}&`;
+  return requestJson<FollowUpTask[]>(
+    session,
+    `/discovery/organizations/${session.organization_id}/follow-up-tasks?${statusQuery}limit=${limit}`
+  );
+}
+
+export function completeFollowUpTask(session: Session, taskId: string) {
+  return requestJson<FollowUpTask>(
+    session,
+    `/discovery/organizations/${session.organization_id}/follow-up-tasks/${taskId}/complete`,
+    { method: "POST" }
   );
 }
 

@@ -369,6 +369,36 @@ def test_manual_customer_routes_create_and_delete_within_the_organization() -> N
         json=payload,
     )
     lead_id = created.json()["id"]
+    task = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/follow-up-tasks",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={
+            "title": "Prepare FOB quotation",
+            "task_type": "quote",
+            "quote_status": "preparing_quote",
+            "due_at": "2026-08-05T09:00:00Z",
+        },
+    )
+    listed_tasks = client.get(
+        f"/discovery/organizations/{client.acme_id}/follow-up-tasks?status_filter=open",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    detail_with_task = client.get(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/detail",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    completed_task = client.post(
+        f"/discovery/organizations/{client.acme_id}/follow-up-tasks/{task.json()['id']}/complete",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    listed_done_tasks = client.get(
+        f"/discovery/organizations/{client.acme_id}/follow-up-tasks?status_filter=done",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    follow_ups_after_task = client.get(
+        f"/discovery/organizations/{client.acme_id}/follow-ups",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
     deleted = client.delete(
         f"/discovery/organizations/{client.acme_id}/leads/{lead_id}",  # type: ignore[attr-defined]
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
@@ -385,6 +415,18 @@ def test_manual_customer_routes_create_and_delete_within_the_organization() -> N
     assert created.json()["evidence"][0]["signal_name"] == "manual_entry"
     assert duplicate.status_code == 409
     assert cross_tenant.status_code == 403
+    assert task.status_code == 201
+    assert task.json()["quote_status"] == "preparing_quote"
+    assert task.json()["status"] == "open"
+    assert listed_tasks.status_code == 200
+    assert listed_tasks.json()[0]["lead_company_name"] == "Manual Import GmbH"
+    assert detail_with_task.status_code == 200
+    assert detail_with_task.json()["status"] == "quoting"
+    assert detail_with_task.json()["follow_up_tasks"][0]["title"] == "Prepare FOB quotation"
+    assert completed_task.status_code == 200
+    assert completed_task.json()["status"] == "done"
+    assert listed_done_tasks.json()[0]["id"] == task.json()["id"]
+    assert follow_ups_after_task.json()[0]["activity_type"] == "task_done"
     assert deleted.status_code == 204
     assert missing_after_delete.status_code == 404
 

@@ -70,6 +70,7 @@ const convertedLead = {
       created_at: "2026-08-03T08:00:00Z",
     },
   ],
+  follow_up_tasks: [],
 };
 
 test("converts a website inquiry into a CRM customer", async ({ page }) => {
@@ -131,6 +132,9 @@ test("converts a website inquiry into a CRM customer", async ({ page }) => {
           : []
       ),
     });
+  });
+  await page.route(/\/discovery\/organizations\/org-1\/follow-up-tasks(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
   });
   await page.route(/\/discovery\/organizations\/org-1\/website-inquiries(?:\?.*)?$/, async (route) => {
     const url = new URL(route.request().url());

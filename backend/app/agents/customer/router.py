@@ -15,6 +15,8 @@ from app.crm.models import (
     EmailDraft,
     EmailDraftStatus,
     FollowUpRecord,
+    FollowUpTask,
+    FollowUpTaskStatus,
     Lead,
     LeadBucket,
     LeadEvidence,
@@ -100,6 +102,32 @@ class OrganizationFollowUpResponse(FollowUpResponse):
     lead_status: LeadStatus
 
 
+class FollowUpTaskRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    task_type: str = Field(default="follow_up", min_length=1, max_length=50)
+    quote_status: str = Field(default="", max_length=50)
+    due_at: datetime | None = None
+
+
+class FollowUpTaskResponse(BaseModel):
+    id: str
+    lead_id: str
+    actor_user_id: str | None
+    title: str
+    task_type: str
+    quote_status: str
+    due_at: datetime | None
+    status: FollowUpTaskStatus
+    completed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class OrganizationFollowUpTaskResponse(FollowUpTaskResponse):
+    lead_company_name: str
+    lead_status: LeadStatus
+
+
 class ContactRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     title: str = Field(default="", max_length=200)
@@ -163,6 +191,7 @@ class EmailDraftResponse(BaseModel):
 class LeadDetailResponse(LeadResponse):
     contacts: list[ContactResponse]
     follow_ups: list[FollowUpResponse]
+    follow_up_tasks: list[FollowUpTaskResponse]
 
 
 class WebsiteInquiryRequest(BaseModel):
@@ -218,6 +247,30 @@ def follow_up_response(record: FollowUpRecord) -> FollowUpResponse:
 def organization_follow_up_response(record: FollowUpRecord, lead: Lead) -> OrganizationFollowUpResponse:
     return OrganizationFollowUpResponse(
         **follow_up_response(record).model_dump(),
+        lead_company_name=lead.company_name,
+        lead_status=lead.status,
+    )
+
+
+def follow_up_task_response(task: FollowUpTask) -> FollowUpTaskResponse:
+    return FollowUpTaskResponse(
+        id=task.id,
+        lead_id=task.lead_id,
+        actor_user_id=task.actor_user_id,
+        title=task.title,
+        task_type=task.task_type,
+        quote_status=task.quote_status,
+        due_at=task.due_at,
+        status=task.status,
+        completed_at=task.completed_at,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+    )
+
+
+def organization_follow_up_task_response(task: FollowUpTask, lead: Lead) -> OrganizationFollowUpTaskResponse:
+    return OrganizationFollowUpTaskResponse(
+        **follow_up_task_response(task).model_dump(),
         lead_company_name=lead.company_name,
         lead_status=lead.status,
     )
@@ -301,6 +354,10 @@ def lead_detail_response(lead: Lead, service: LeadService, organization_id: str)
     response["follow_ups"] = [
         follow_up_response(record)
         for record in service.follow_ups_for_lead(lead.id, organization_id)
+    ]
+    response["follow_up_tasks"] = [
+        follow_up_task_response(task)
+        for task in service.follow_up_tasks_for_lead(lead.id, organization_id)
     ]
     return LeadDetailResponse(**response)
 
@@ -806,6 +863,39 @@ def create_follow_up(
     return follow_up_response(record)
 
 
+@router.post(
+    "/organizations/{organization_id}/leads/{lead_id}/follow-up-tasks",
+    response_model=FollowUpTaskResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_follow_up_task(
+    organization_id: str,
+    lead_id: str,
+    payload: FollowUpTaskRequest,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> FollowUpTaskResponse:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+        task = LeadService(session).create_follow_up_task(
+            organization_id=organization_id,
+            lead_id=lead_id,
+            actor_user_id=principal.user_id,
+            title=payload.title,
+            task_type=payload.task_type,
+            quote_status=payload.quote_status,
+            due_at=payload.due_at,
+        )
+        session.commit()
+    except PermissionError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except LookupError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    return follow_up_task_response(task)
+
+
 @router.get("/organizations/{organization_id}/follow-ups", response_model=list[OrganizationFollowUpResponse])
 def list_follow_ups(
     organization_id: str,
@@ -825,6 +915,56 @@ def list_follow_ups(
             limit=safe_limit,
         )
     ]
+
+
+@router.get("/organizations/{organization_id}/follow-up-tasks", response_model=list[OrganizationFollowUpTaskResponse])
+def list_follow_up_tasks(
+    organization_id: str,
+    status_filter: FollowUpTaskStatus | None = FollowUpTaskStatus.OPEN,
+    limit: int = 20,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> list[OrganizationFollowUpTaskResponse]:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+    except PermissionError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    safe_limit = min(max(limit, 1), 50)
+    return [
+        organization_follow_up_task_response(task, lead)
+        for task, lead in LeadService(session).list_follow_up_tasks(
+            organization_id=organization_id,
+            status_filter=status_filter,
+            limit=safe_limit,
+        )
+    ]
+
+
+@router.post(
+    "/organizations/{organization_id}/follow-up-tasks/{task_id}/complete",
+    response_model=FollowUpTaskResponse,
+)
+def complete_follow_up_task(
+    organization_id: str,
+    task_id: str,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> FollowUpTaskResponse:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+        task = LeadService(session).complete_follow_up_task(
+            organization_id=organization_id,
+            task_id=task_id,
+            actor_user_id=principal.user_id,
+        )
+        session.commit()
+    except PermissionError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except LookupError as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    return follow_up_task_response(task)
 
 
 @router.get("/organizations/{organization_id}/leads/{lead_id}", response_model=LeadResponse)

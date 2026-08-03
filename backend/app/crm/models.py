@@ -40,6 +40,11 @@ class WebsiteInquiryStatus(StrEnum):
     DISMISSED = "dismissed"
 
 
+class FollowUpTaskStatus(StrEnum):
+    OPEN = "open"
+    DONE = "done"
+
+
 class Lead(Base):
     __tablename__ = "leads"
     __table_args__ = (UniqueConstraint("organization_id", "canonical_domain", name="uq_lead_domain"),)
@@ -110,6 +115,36 @@ class FollowUpRecord(Base):
     content: Mapped[str] = mapped_column(String(4_000), nullable=False)
     next_follow_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class FollowUpTask(Base):
+    __tablename__ = "follow_up_tasks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    lead_id: Mapped[str] = mapped_column(
+        ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    actor_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(50), default="follow_up", nullable=False)
+    quote_status: Mapped[str] = mapped_column(String(50), default="", nullable=False)
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    status: Mapped[FollowUpTaskStatus] = mapped_column(
+        Enum(FollowUpTaskStatus, native_enum=False, length=20),
+        default=FollowUpTaskStatus.OPEN,
+        nullable=False,
+        index=True,
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
 class CRMContact(Base):

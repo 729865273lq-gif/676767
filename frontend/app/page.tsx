@@ -3,10 +3,12 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
+  completeFollowUpTask,
   convertWebsiteInquiry,
   createContact,
   createEmailDraft,
   createFollowUp,
+  createFollowUpTask,
   createProductItem,
   createProductLine,
   createManualLead,
@@ -16,6 +18,7 @@ import {
   getLeadDetail,
   getPublicProductCatalogUrl,
   listEmailDrafts,
+  listFollowUpTasks,
   listFollowUps,
   listLeads,
   listProductLines,
@@ -28,6 +31,8 @@ import {
   type ContactRecord,
   type EmailDraft,
   type FollowUpRecord,
+  type FollowUpTask,
+  type FollowUpTaskStatus,
   type Lead,
   type LeadDetail,
   type LeadStatus,
@@ -75,6 +80,28 @@ const websiteInquiryStatusLabel: Record<WebsiteInquiryStatus, string> = {
   converted: "已转客户",
   dismissed: "已忽略",
 };
+
+const followUpTaskStatusLabel: Record<FollowUpTaskStatus, string> = {
+  open: "待完成",
+  done: "已完成",
+};
+
+const quoteStatusLabel: Record<string, string> = {
+  requested: "客户要报价",
+  preparing_quote: "准备报价",
+  quote_sent: "已发报价",
+  negotiating: "谈判中",
+  won: "已成交",
+  lost: "未成交",
+};
+
+function taskTypeLabel(taskType: string) {
+  if (taskType === "quote") return "报价任务";
+  if (taskType === "sample") return "样品任务";
+  if (taskType === "call") return "电话任务";
+  if (taskType === "meeting") return "会议任务";
+  return "跟进任务";
+}
 
 function isCrmLead(lead: Lead) {
   return lead.status !== "new";
@@ -1009,6 +1036,61 @@ function InboxPanel({
   );
 }
 
+function FollowUpTaskBoard({
+  tasks,
+  loading,
+  completingTaskId,
+  onRefresh,
+  onComplete,
+}: {
+  tasks: FollowUpTask[];
+  loading: boolean;
+  completingTaskId: string;
+  onRefresh: () => void;
+  onComplete: (taskId: string) => void;
+}) {
+  const openTasks = tasks.filter((task) => task.status === "open");
+  return (
+    <section className="timelinePanel" aria-labelledby="task-board-title">
+      <div className="sectionHeader compact">
+        <div>
+          <p className="sectionLabel">销售任务</p>
+          <h2 id="task-board-title">跟进任务</h2>
+        </div>
+        <button className="iconTextButton" type="button" onClick={onRefresh}>刷新</button>
+      </div>
+      {loading ? (
+        <div className="emptyState">正在加载跟进任务...</div>
+      ) : openTasks.length === 0 ? (
+        <div className="emptyState">暂无待办任务。可以在客户详情页创建报价、电话或样品跟进任务。</div>
+      ) : (
+        <div className="taskList" aria-label="跟进任务列表">
+          {openTasks.slice(0, 5).map((task) => (
+            <article className="taskItem" key={task.id}>
+              <div>
+                <strong>{task.title}</strong>
+                <span>{task.lead_company_name ?? "客户"} / {taskTypeLabel(task.task_type)}</span>
+                <small>
+                  {task.quote_status ? quoteStatusLabel[task.quote_status] ?? task.quote_status : "无报价状态"} / 截止：{formatDateTime(task.due_at)}
+                </small>
+              </div>
+              <button
+                className="outlineButton"
+                type="button"
+                disabled={completingTaskId === task.id}
+                onClick={() => onComplete(task.id)}
+              >
+                {completingTaskId === task.id ? "完成中..." : "标记完成"}
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+      <div className="reviewFooter"><span>待完成</span><strong>{openTasks.length} 个任务</strong></div>
+    </section>
+  );
+}
+
 function ReviewDrawer({
   open,
   draft,
@@ -1124,30 +1206,39 @@ function CustomerDetailDrawer({
   saving,
   addingContact,
   addingFollowUp,
+  addingTask,
   deletingContactId,
   generatingDraftContactId,
+  completingTaskId,
   onClose,
   onSave,
   onAddContact,
   onDeleteContact,
   onCreateEmailDraft,
   onAddFollowUp,
+  onAddTask,
+  onCompleteTask,
 }: {
   detail: LeadDetail | null;
   loading: boolean;
   saving: boolean;
   addingContact: boolean;
   addingFollowUp: boolean;
+  addingTask: boolean;
   deletingContactId: string;
   generatingDraftContactId: string;
+  completingTaskId: string;
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
   onAddContact: (event: FormEvent<HTMLFormElement>) => void;
   onDeleteContact: (contactId: string) => void;
   onCreateEmailDraft: (contactId: string) => void;
   onAddFollowUp: (event: FormEvent<HTMLFormElement>) => void;
+  onAddTask: (event: FormEvent<HTMLFormElement>) => void;
+  onCompleteTask: (taskId: string) => void;
 }) {
   if (!detail && !loading) return null;
+  const followUpTasks = detail?.follow_up_tasks ?? [];
 
   return (
     <div className="drawerBackdrop" role="presentation" onMouseDown={onClose}>
@@ -1291,6 +1382,70 @@ function CustomerDetailDrawer({
               )}
             </section>
 
+            <form className="taskForm" onSubmit={onAddTask} key={`task-${detail.id}-${followUpTasks.length}`}>
+              <h3>新增跟进任务</h3>
+              <label>
+                任务类型
+                <select name="task_type" defaultValue="follow_up">
+                  <option value="follow_up">普通跟进</option>
+                  <option value="quote">报价</option>
+                  <option value="sample">样品</option>
+                  <option value="call">电话</option>
+                  <option value="meeting">会议</option>
+                </select>
+              </label>
+              <label>
+                报价状态
+                <select name="quote_status" defaultValue="">
+                  <option value="">不设置</option>
+                  <option value="requested">客户要报价</option>
+                  <option value="preparing_quote">准备报价</option>
+                  <option value="quote_sent">已发报价</option>
+                  <option value="negotiating">谈判中</option>
+                </select>
+              </label>
+              <label>
+                截止时间
+                <input name="due_at" type="datetime-local" />
+              </label>
+              <label className="wideField">
+                任务内容
+                <textarea name="title" required maxLength={200} placeholder="例如：准备 500 套样品 FOB 报价并发给客户。" />
+              </label>
+              <button className="primaryButton" type="submit" disabled={addingTask}>
+                {addingTask ? "创建中..." : "创建任务"}
+              </button>
+            </form>
+
+            <section className="detailBlock">
+              <h3>跟进任务</h3>
+              {followUpTasks.length === 0 ? (
+                <p className="mutedCopy">暂无跟进任务。</p>
+              ) : (
+                <div className="taskList">
+                  {followUpTasks.map((task: FollowUpTask) => (
+                    <article className="taskItem" key={task.id}>
+                      <div>
+                        <strong>{task.title}</strong>
+                        <span>{taskTypeLabel(task.task_type)} / {followUpTaskStatusLabel[task.status]}</span>
+                        <small>
+                          {task.quote_status ? quoteStatusLabel[task.quote_status] ?? task.quote_status : "无报价状态"} / 截止：{formatDateTime(task.due_at)}
+                        </small>
+                      </div>
+                      <button
+                        className="outlineButton"
+                        type="button"
+                        disabled={task.status !== "open" || completingTaskId === task.id}
+                        onClick={() => onCompleteTask(task.id)}
+                      >
+                        {completingTaskId === task.id ? "完成中..." : task.status === "open" ? "标记完成" : "已完成"}
+                      </button>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
+
             <form className="followUpForm" onSubmit={onAddFollowUp}>
               <h3>新增跟进记录</h3>
               <label>
@@ -1369,8 +1524,12 @@ export default function HomePage() {
   const [deletingContactId, setDeletingContactId] = useState("");
   const [generatingDraftContactId, setGeneratingDraftContactId] = useState("");
   const [addingFollowUp, setAddingFollowUp] = useState(false);
+  const [addingTask, setAddingTask] = useState(false);
+  const [completingTaskId, setCompletingTaskId] = useState("");
   const [followUps, setFollowUps] = useState<FollowUpRecord[]>([]);
   const [loadingFollowUps, setLoadingFollowUps] = useState(false);
+  const [followUpTasks, setFollowUpTasks] = useState<FollowUpTask[]>([]);
+  const [loadingFollowUpTasks, setLoadingFollowUpTasks] = useState(false);
   const [emailDrafts, setEmailDrafts] = useState<EmailDraft[]>([]);
   const [loadingEmailDrafts, setLoadingEmailDrafts] = useState(false);
   const [websiteInquiries, setWebsiteInquiries] = useState<WebsiteInquiry[]>([]);
@@ -1426,6 +1585,11 @@ export default function HomePage() {
       .then((items) => setFollowUps(items))
       .catch((caught: unknown) => handleApiFailure(caught, "无法加载跟进记录"))
       .finally(() => setLoadingFollowUps(false));
+    setLoadingFollowUpTasks(true);
+    listFollowUpTasks(currentSession, "open")
+      .then((items) => setFollowUpTasks(items))
+      .catch((caught: unknown) => handleApiFailure(caught, "无法加载跟进任务"))
+      .finally(() => setLoadingFollowUpTasks(false));
     setLoadingEmailDrafts(true);
     listEmailDrafts(currentSession)
       .then((items) => {
@@ -1478,6 +1642,19 @@ export default function HomePage() {
       handleApiFailure(caught, "无法刷新跟进记录");
     } finally {
       setLoadingFollowUps(false);
+    }
+  }
+
+  async function refreshFollowUpTasks() {
+    if (!session) return;
+    setLoadingFollowUpTasks(true);
+    try {
+      const items = await listFollowUpTasks(session, "open");
+      setFollowUpTasks(items);
+    } catch (caught) {
+      handleApiFailure(caught, "无法刷新跟进任务");
+    } finally {
+      setLoadingFollowUpTasks(false);
     }
   }
 
@@ -1680,6 +1857,7 @@ export default function HomePage() {
       setLeads((current) => current.filter((lead) => lead.id !== leadId));
       setSelectedLeadIds((current) => current.filter((selectedId) => selectedId !== leadId));
       setEmailDrafts((current) => current.filter((draft) => draft.lead_id !== leadId));
+      setFollowUpTasks((current) => current.filter((task) => task.lead_id !== leadId));
       if (selectedLeadId === leadId) {
         setSelectedLeadId("");
         setLeadDetail(null);
@@ -1863,6 +2041,51 @@ export default function HomePage() {
     }
   }
 
+  async function addFollowUpTaskRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !leadDetail) return;
+    const form = new FormData(event.currentTarget);
+    const dueAt = String(form.get("due_at") ?? "");
+    setAddingTask(true);
+    setError("");
+    try {
+      await createFollowUpTask(session, leadDetail.id, {
+        title: String(form.get("title") ?? "").trim(),
+        task_type: String(form.get("task_type") ?? "follow_up"),
+        quote_status: String(form.get("quote_status") ?? ""),
+        due_at: dueAt ? new Date(dueAt).toISOString() : null,
+      });
+      const refreshed = await getLeadDetail(session, leadDetail.id);
+      setLeadDetail(refreshed);
+      setLeads((current) => current.map((lead) => (lead.id === refreshed.id ? refreshed : lead)));
+      await refreshFollowUpTasks();
+      event.currentTarget.reset();
+    } catch (caught) {
+      handleApiFailure(caught, "无法创建跟进任务");
+    } finally {
+      setAddingTask(false);
+    }
+  }
+
+  async function completeTask(taskId: string) {
+    if (!session) return;
+    setCompletingTaskId(taskId);
+    setError("");
+    try {
+      const completed = await completeFollowUpTask(session, taskId);
+      setFollowUpTasks((current) => current.filter((task) => task.id !== taskId));
+      if (leadDetail?.id === completed.lead_id) {
+        const refreshed = await getLeadDetail(session, completed.lead_id);
+        setLeadDetail(refreshed);
+      }
+      await refreshFollowUps();
+    } catch (caught) {
+      handleApiFailure(caught, "无法完成跟进任务");
+    } finally {
+      setCompletingTaskId("");
+    }
+  }
+
   async function saveEmailDraft(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!session || !selectedEmailDraft) return;
@@ -2034,6 +2257,13 @@ export default function HomePage() {
               loading={loadingFollowUps}
               onRefresh={refreshFollowUps}
             />
+            <FollowUpTaskBoard
+              tasks={followUpTasks}
+              loading={loadingFollowUpTasks}
+              completingTaskId={completingTaskId}
+              onRefresh={refreshFollowUpTasks}
+              onComplete={completeTask}
+            />
             <FollowUpTimeline
               records={followUps}
               loading={loadingFollowUps}
@@ -2059,14 +2289,18 @@ export default function HomePage() {
         saving={savingLeadDetail}
         addingContact={addingContact}
         addingFollowUp={addingFollowUp}
+        addingTask={addingTask}
         deletingContactId={deletingContactId}
         generatingDraftContactId={generatingDraftContactId}
+        completingTaskId={completingTaskId}
         onClose={closeLeadDetail}
         onSave={saveLeadDetail}
         onAddContact={addContactRecord}
         onDeleteContact={deleteContactRecord}
         onCreateEmailDraft={createEmailDraftForContact}
         onAddFollowUp={addFollowUpRecord}
+        onAddTask={addFollowUpTaskRecord}
+        onCompleteTask={completeTask}
       />
       <ReviewDrawer
         open={reviewOpen}

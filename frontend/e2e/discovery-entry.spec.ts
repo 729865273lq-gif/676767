@@ -136,6 +136,9 @@ test("creates a product line and displays discovered leads", async ({ page }) =>
   await page.route(/\/discovery\/organizations\/org-1\/follow-ups/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
   });
+  await page.route(/\/discovery\/organizations\/org-1\/follow-up-tasks(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
 
   await page.goto("/");
   const productForm = page.locator(".productForm");
