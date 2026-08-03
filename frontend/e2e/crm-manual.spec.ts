@@ -375,8 +375,13 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   const customerDrawer = page.getByLabel("客户详情", { exact: true });
   await expect(customerDrawer.locator(".taskList").getByText("Prepare 500 sample FOB quote")).toBeVisible();
   await expect(page.locator(".detailSummary strong").filter({ hasText: "报价中" })).toBeVisible();
+  await expect(
+    page.getByLabel("客户阶段漏斗").locator(".funnelStage").filter({ hasText: "报价中" }).getByText("1 个 / 100%")
+  ).toBeVisible();
+  await expect(page.getByLabel("待处理动作").locator(".actionSignal").filter({ hasText: "待办任务" }).locator("strong")).toHaveText("1");
   await customerDrawer.locator(".taskList").getByRole("button", { name: "标记完成" }).click();
   await expect(customerDrawer.locator(".taskList").getByRole("button", { name: "已完成" })).toBeVisible();
+  await expect(page.getByLabel("待处理动作").locator(".actionSignal").filter({ hasText: "待办任务" }).locator("strong")).toHaveText("0");
   await expect(page.locator(".followUpList").getByText("Completed task: Prepare 500 sample FOB quote")).toBeVisible();
 
   await page.getByLabel("跟进类型").selectOption("email");

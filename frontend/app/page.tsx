@@ -50,6 +50,20 @@ type Metric = {
   tone: "blue" | "cyan" | "orange" | "green";
 };
 
+type FunnelStage = {
+  status: LeadStatus;
+  label: string;
+  count: number;
+  share: number;
+  note: string;
+};
+
+type ActionSignal = {
+  label: string;
+  count: number;
+  note: string;
+};
+
 const navItems = ["总览", "客户搜索 Agent", "CRM", "独立站询盘", "邮件审核", "收件箱", "知识库"];
 
 const bucketLabel = {
@@ -137,6 +151,66 @@ function MetricTile({ label, value, note, tone }: Metric) {
   );
 }
 
+function SalesFunnelPanel({
+  stages,
+  actionSignals,
+  totalLeads,
+  disqualified,
+}: {
+  stages: FunnelStage[];
+  actionSignals: ActionSignal[];
+  totalLeads: number;
+  disqualified: number;
+}) {
+  const activeActions = actionSignals.reduce((sum, signal) => sum + signal.count, 0);
+  return (
+    <section className="funnelPanel" aria-labelledby="sales-funnel-title">
+      <div className="sectionHeader compact">
+        <div>
+          <p className="sectionLabel">销售漏斗</p>
+          <h2 id="sales-funnel-title">客户阶段总览</h2>
+        </div>
+        <span className="countBadge">{totalLeads} 个客户 / {activeActions} 个动作</span>
+      </div>
+      <div className="funnelContent">
+        <div className="funnelStages" aria-label="客户阶段漏斗">
+          {stages.map((stage) => (
+            <article className="funnelStage" key={stage.status}>
+              <div>
+                <strong>{stage.label}</strong>
+                <span>{stage.note}</span>
+              </div>
+              <div className="funnelMeter" aria-label={`${stage.label} ${stage.count} 个客户`}>
+                <span style={{ width: `${Math.max(stage.share, stage.count > 0 ? 8 : 0)}%` }} />
+              </div>
+              <small>{stage.count} 个 / {stage.share}%</small>
+            </article>
+          ))}
+        </div>
+        <div className="actionSignals" aria-label="待处理动作">
+          <div className="actionSignalHeader">
+            <strong>待处理动作</strong>
+            <span>暂不自动外联，只提示人工处理</span>
+          </div>
+          {actionSignals.map((signal) => (
+            <article className="actionSignal" key={signal.label}>
+              <strong>{signal.count}</strong>
+              <div>
+                <span>{signal.label}</span>
+                <small>{signal.note}</small>
+              </div>
+            </article>
+          ))}
+          <div className="funnelFooter">
+            <span>暂不合适</span>
+            <strong>{disqualified} 个客户</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function buildMetrics(leads: Lead[], drafts: EmailDraft[], followUps: FollowUpRecord[]): Metric[] {
   const newLeads = leads.filter((lead) => lead.status === "new").length;
   const priorityLeads = leads.filter((lead) => lead.bucket === "priority_recommendation").length;
@@ -148,6 +222,51 @@ function buildMetrics(leads: Lead[], drafts: EmailDraft[], followUps: FollowUpRe
     { label: "待审核邮件", value: String(pendingDrafts), note: "坚持人工审批", tone: "orange" },
     { label: "客户回复", value: String(replies), note: "人工记录或邮箱同步", tone: "green" },
   ];
+}
+
+function buildSalesFunnel(
+  leads: Lead[],
+  drafts: EmailDraft[],
+  tasks: FollowUpTask[],
+  inquiries: WebsiteInquiry[]
+) {
+  const stageOrder: LeadStatus[] = ["new", "to_contact", "contacted", "interested", "quoting", "won"];
+  const totalLeads = leads.length;
+  const stages: FunnelStage[] = stageOrder.map((status) => {
+    const count = leads.filter((lead) => lead.status === status).length;
+    const share = totalLeads > 0 ? Math.round((count / totalLeads) * 100) : 0;
+    return {
+      status,
+      label: leadStatusLabel[status],
+      count,
+      share,
+      note: status === "new" ? "待筛选" : status === "won" ? "已成交" : "推进中",
+    };
+  });
+  const disqualified = leads.filter((lead) => lead.status === "not_fit").length;
+  const actionSignals: ActionSignal[] = [
+    {
+      label: "新询盘",
+      count: inquiries.filter((inquiry) => inquiry.status === "new").length,
+      note: "独立站接口进来的未转客户询盘",
+    },
+    {
+      label: "待联系",
+      count: leads.filter((lead) => lead.status === "to_contact").length,
+      note: "已进入 CRM 但还没完成首次联系",
+    },
+    {
+      label: "待审核邮件",
+      count: drafts.filter((draft) => draft.status === "pending_approval").length,
+      note: "人工审核后才允许标记待发送",
+    },
+    {
+      label: "待办任务",
+      count: tasks.filter((task) => task.status === "open").length,
+      note: "报价、样品、电话和会议任务",
+    },
+  ];
+  return { stages, actionSignals, totalLeads, disqualified };
 }
 
 function csvCell(value: string | number | null | undefined) {
@@ -1556,6 +1675,10 @@ export default function HomePage() {
     () => buildMetrics(leads, emailDrafts, followUps),
     [leads, emailDrafts, followUps]
   );
+  const salesFunnel = useMemo(
+    () => buildSalesFunnel(leads, emailDrafts, followUpTasks, websiteInquiries),
+    [leads, emailDrafts, followUpTasks, websiteInquiries]
+  );
 
   useEffect(() => {
     const currentSession = readSession();
@@ -2202,6 +2325,7 @@ export default function HomePage() {
           </section>
           {error && <div className="errorBanner" role="alert">{error}</div>}
           <section className="metricGrid" aria-label="销售指标">{dashboardMetrics.map((metric) => <MetricTile key={metric.label} {...metric} />)}</section>
+          <SalesFunnelPanel {...salesFunnel} />
           <ProductLineSetup productLines={productLines} loading={loadingProductLines} creating={creatingProductLine} onCreate={createProductLineFromForm} />
           <ProductCatalogManager
             productLines={productLines}

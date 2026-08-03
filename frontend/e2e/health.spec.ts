@@ -119,6 +119,10 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
   await expect(page.locator("tbody").getByText("LumenHaus GmbH")).toBeVisible();
   await expect(page.getByLabel("销售指标").locator(".metricTile").filter({ hasText: "新增线索" }).getByText("2")).toBeVisible();
   await expect(page.getByLabel("销售指标").locator(".metricTile").filter({ hasText: "优先客户" }).getByText("1")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "客户阶段总览" })).toBeVisible();
+  await expect(
+    page.getByLabel("客户阶段漏斗").locator(".funnelStage").filter({ hasText: "新客户" }).getByText("2 个 / 100%")
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: "只看优先客户" })).toBeVisible();
 
   const [download] = await Promise.all([
