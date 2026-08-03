@@ -217,6 +217,17 @@ def test_product_line_routes_enforce_roles_and_organization_scope() -> None:
             "is_published": True,
         },
     )
+    unpublished_item = client.post(
+        f"/platform/organizations/{client.acme_id}/product-lines/{product_line_id}/items",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
+        json={
+            "name": "Private Sample Driver",
+            "sku": "DRV-SAMPLE",
+            "summary": "Internal sample only.",
+            "specs": ["private"],
+            "is_published": False,
+        },
+    )
     listed_items = client.get(
         f"/platform/organizations/{client.acme_id}/product-items?product_line_id={product_line_id}",  # type: ignore[attr-defined]
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
@@ -229,6 +240,10 @@ def test_product_line_routes_enforce_roles_and_organization_scope() -> None:
         f"/platform/organizations/{client.globex_id}/product-lines",  # type: ignore[attr-defined]
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
     )
+    public_catalog = client.get(
+        f"/platform/public/organizations/{client.acme_id}/product-catalog",  # type: ignore[attr-defined]
+    )
+    missing_catalog = client.get("/platform/public/organizations/missing-org/product-catalog")
 
     assert denied.status_code == 403
     assert created.status_code == 201
@@ -236,13 +251,22 @@ def test_product_line_routes_enforce_roles_and_organization_scope() -> None:
     assert supplier.status_code == 201
     assert denied_item.status_code == 403
     assert product_item.status_code == 201
+    assert unpublished_item.status_code == 201
     assert product_item.json()["sku"] == "FL-200W"
     assert listed_items.status_code == 200
-    assert listed_items.json()[0]["name"] == "LED Floodlight 200W"
+    assert {item["name"] for item in listed_items.json()} == {"LED Floodlight 200W", "Private Sample Driver"}
     assert listed.status_code == 200
     assert listed.json()[0]["suppliers"] == ["NOVA Lighting Factory"]
-    assert listed.json()[0]["product_items"][0]["summary"] == "High-output outdoor LED floodlight."
+    listed_item_by_name = {item["name"]: item for item in listed.json()[0]["product_items"]}
+    assert listed_item_by_name["LED Floodlight 200W"]["summary"] == "High-output outdoor LED floodlight."
     assert cross_tenant.status_code == 403
+    assert public_catalog.status_code == 200
+    assert missing_catalog.status_code == 404
+    public_line = public_catalog.json()["product_lines"][0]
+    assert public_line["name"] == "Industrial LED Lighting"
+    assert "suppliers" not in public_line
+    assert [item["name"] for item in public_line["product_items"]] == ["LED Floodlight 200W"]
+    assert public_line["product_items"][0]["inquiry_product_item_id"] == product_item.json()["id"]
 
     deleted_item = client.delete(
         f"/platform/organizations/{client.acme_id}/product-items/{product_item.json()['id']}",  # type: ignore[attr-defined]

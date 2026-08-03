@@ -14,6 +14,7 @@ import {
   deleteLead,
   deleteProductItem,
   getLeadDetail,
+  getPublicProductCatalogUrl,
   listEmailDrafts,
   listFollowUps,
   listLeads,
@@ -270,9 +271,11 @@ function ProductCatalogManager({
     setFormOrigin(window.location.origin);
   }, []);
   const formBaseUrl = formOrigin ? `${formOrigin}/inquiry` : "/inquiry";
+  const catalogFeedUrl = getPublicProductCatalogUrl(organizationId);
   const catalogItems = productLines.flatMap((productLine) =>
     (productLine.product_items ?? []).map((productItem) => ({ productLine, productItem }))
   );
+  const publishedCount = catalogItems.filter(({ productItem }) => productItem.is_published).length;
 
   return (
     <section className="catalogPanel" aria-labelledby="product-catalog-title">
@@ -327,40 +330,55 @@ function ProductCatalogManager({
             {creating ? "保存中..." : "保存产品"}
           </button>
         </form>
-        <div className="catalogList" aria-label="产品目录列表">
-          {catalogItems.length === 0 ? (
-            <div className="emptyState">先维护产品条目。后续独立站页面、询盘表单和客户跟进都会引用这里的数据。</div>
-          ) : (
-            catalogItems.map(({ productLine, productItem }) => {
-              const url = buildInquiryFormUrl(formBaseUrl, organizationId, productLine, productItem);
-              return (
-                <article className="catalogItem" key={productItem.id}>
-                  <div>
-                    <strong>{productItem.name}</strong>
-                    <span>{productLine.name} / {productItem.sku || "未填 SKU"}</span>
-                    <small>{productItem.summary || "暂无卖点摘要"}</small>
-                    <small>{(productItem.specs ?? []).join(", ") || "暂无规格参数"}</small>
-                    <small>{url}</small>
-                    <small>{productItem.is_published ? "公开表单可用" : "仅后台留存"}</small>
-                  </div>
-                  <div className="catalogActions">
-                    <a className="textButton" href={url} target="_blank" rel="noreferrer">打开询盘表单</a>
-                    <button className="textButton" type="button" onClick={() => void navigator.clipboard.writeText(url)}>
-                      复制链接
-                    </button>
-                    <button
-                      className="dangerTextButton"
-                      type="button"
-                      disabled={deletingProductItemId === productItem.id}
-                      onClick={() => onDelete(productItem.id)}
-                    >
-                      {deletingProductItemId === productItem.id ? "删除中..." : "删除"}
-                    </button>
-                  </div>
-                </article>
-              );
-            })
-          )}
+        <div className="catalogExport">
+          <div className="catalogFeed">
+            <div>
+              <strong>公开产品 API</strong>
+              <span>{publishedCount} 个已发布产品会进入独立站数据出口</span>
+              <small>{catalogFeedUrl}</small>
+            </div>
+            <div className="catalogActions">
+              <a className="textButton" href={catalogFeedUrl} target="_blank" rel="noreferrer">打开 JSON</a>
+              <button className="textButton" type="button" onClick={() => void navigator.clipboard.writeText(catalogFeedUrl)}>
+                复制 API
+              </button>
+            </div>
+          </div>
+          <div className="catalogList" aria-label="产品目录列表">
+            {catalogItems.length === 0 ? (
+              <div className="emptyState">先维护产品条目。后续独立站页面、询盘表单和客户跟进都会引用这里的数据。</div>
+            ) : (
+              catalogItems.map(({ productLine, productItem }) => {
+                const url = buildInquiryFormUrl(formBaseUrl, organizationId, productLine, productItem);
+                return (
+                  <article className="catalogItem" key={productItem.id}>
+                    <div>
+                      <strong>{productItem.name}</strong>
+                      <span>{productLine.name} / {productItem.sku || "未填 SKU"}</span>
+                      <small>{productItem.summary || "暂无卖点摘要"}</small>
+                      <small>{(productItem.specs ?? []).join(", ") || "暂无规格参数"}</small>
+                      <small>{url}</small>
+                      <small>{productItem.is_published ? "公开表单可用" : "仅后台留存"}</small>
+                    </div>
+                    <div className="catalogActions">
+                      <a className="textButton" href={url} target="_blank" rel="noreferrer">打开询盘表单</a>
+                      <button className="textButton" type="button" onClick={() => void navigator.clipboard.writeText(url)}>
+                        复制链接
+                      </button>
+                      <button
+                        className="dangerTextButton"
+                        type="button"
+                        disabled={deletingProductItemId === productItem.id}
+                        onClick={() => onDelete(productItem.id)}
+                      >
+                        {deletingProductItemId === productItem.id ? "删除中..." : "删除"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })
+            )}
+          </div>
         </div>
       </div>
     </section>

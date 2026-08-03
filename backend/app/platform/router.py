@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.platform.credentials import CredentialCipher, CredentialService
 from app.platform.auth import AuthService
-from app.platform.models import UserMembership
+from app.platform.models import Organization, UserMembership
 from app.platform.product_lines import ProductItemNotFound, ProductLineNotFound, ProductLineService
 from app.platform.service import OrganizationService, TenantAccessDenied
 from app.shared.security import InvalidPrincipalToken, PrincipalTokenCodec, SignedPrincipal
@@ -82,6 +82,32 @@ class ProductLineResponse(BaseModel):
     is_active: bool
     suppliers: list[str]
     product_items: list[ProductItemResponse]
+
+
+class PublicProductItemResponse(BaseModel):
+    id: str
+    name: str
+    sku: str
+    summary: str
+    specs: list[str]
+    image_url: str
+    inquiry_product_line_id: str
+    inquiry_product_item_id: str
+
+
+class PublicProductLineResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    product_keywords: list[str]
+    buyer_profiles: list[str]
+    target_regions: list[str]
+    product_items: list[PublicProductItemResponse]
+
+
+class PublicProductCatalogResponse(BaseModel):
+    organization_id: str
+    product_lines: list[PublicProductLineResponse]
 
 
 class ProductSupplierRequest(BaseModel):
@@ -221,6 +247,19 @@ def product_line_response(product_line, suppliers: list[str], product_items: lis
     )
 
 
+def public_product_item_response(product_item) -> PublicProductItemResponse:
+    return PublicProductItemResponse(
+        id=product_item.id,
+        name=product_item.name,
+        sku=product_item.sku,
+        summary=product_item.summary,
+        specs=product_item.specs,
+        image_url=product_item.image_url,
+        inquiry_product_line_id=product_item.product_line_id,
+        inquiry_product_item_id=product_item.id,
+    )
+
+
 @router.post(
     "/organizations/{organization_id}/product-lines",
     response_model=ProductLineResponse,
@@ -270,6 +309,40 @@ def list_product_lines(
         )
         for product_line in service.list_product_lines(organization_id)
     ]
+
+
+@router.get(
+    "/public/organizations/{organization_id}/product-catalog",
+    response_model=PublicProductCatalogResponse,
+)
+def public_product_catalog(
+    organization_id: str,
+    session: Session = Depends(get_session),
+) -> PublicProductCatalogResponse:
+    if session.get(Organization, organization_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="organization not found")
+    service = ProductLineService(session)
+    items_by_product_line = service.product_items_by_product_line(organization_id)
+    product_lines: list[PublicProductLineResponse] = []
+    for product_line in service.list_product_lines(organization_id):
+        public_items = [
+            public_product_item_response(product_item)
+            for product_item in items_by_product_line.get(product_line.id, [])
+            if product_item.is_published
+        ]
+        if public_items:
+            product_lines.append(
+                PublicProductLineResponse(
+                    id=product_line.id,
+                    name=product_line.name,
+                    description=product_line.description,
+                    product_keywords=product_line.product_keywords,
+                    buyer_profiles=product_line.buyer_profiles,
+                    target_regions=product_line.target_regions,
+                    product_items=public_items,
+                )
+            )
+    return PublicProductCatalogResponse(organization_id=organization_id, product_lines=product_lines)
 
 
 @router.post(

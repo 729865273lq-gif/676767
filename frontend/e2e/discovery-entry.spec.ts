@@ -157,6 +157,9 @@ test("creates a product line and displays discovered leads", async ({ page }) =>
   await catalogForm.getByLabel("简短卖点").fill("High-output model for warehouse projects.");
   await catalogForm.getByLabel("规格参数").fill("200W, IP66, CE");
   await page.getByRole("button", { name: "保存产品" }).click();
+  await expect(page.getByText("公开产品 API")).toBeVisible();
+  await expect(page.getByText("1 个已发布产品会进入独立站数据出口")).toBeVisible();
+  await expect(page.getByText("/platform/public/organizations/org-1/product-catalog")).toBeVisible();
   await expect(page.getByLabel("产品目录列表").getByText("LED Floodlight 200W")).toBeVisible();
   await expect(page.getByLabel("产品目录列表").getByText("product_item_id=item-1")).toBeVisible();
 

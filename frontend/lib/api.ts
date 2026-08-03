@@ -25,6 +25,32 @@ export type ProductItem = {
   is_published: boolean;
 };
 
+export type PublicProductItem = {
+  id: string;
+  name: string;
+  sku: string;
+  summary: string;
+  specs: string[];
+  image_url: string;
+  inquiry_product_line_id: string;
+  inquiry_product_item_id: string;
+};
+
+export type PublicProductLine = {
+  id: string;
+  name: string;
+  description: string;
+  product_keywords: string[];
+  buyer_profiles: string[];
+  target_regions: string[];
+  product_items: PublicProductItem[];
+};
+
+export type PublicProductCatalog = {
+  organization_id: string;
+  product_lines: PublicProductLine[];
+};
+
 export type CreateProductLinePayload = {
   name: string;
   description: string;
@@ -256,6 +282,26 @@ export async function deleteProductItem(session: Session, productItemId: string)
     `/platform/organizations/${session.organization_id}/product-items/${productItemId}`,
     { method: "DELETE" }
   );
+}
+
+export function getPublicProductCatalogUrl(organizationId: string) {
+  return `${apiUrl}/platform/public/organizations/${organizationId}/product-catalog`;
+}
+
+export async function fetchPublicProductCatalog(organizationId: string) {
+  const response = await fetch(getPublicProductCatalogUrl(organizationId));
+  const data: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail =
+      typeof data === "object" &&
+      data !== null &&
+      "detail" in data &&
+      typeof data.detail === "string"
+        ? data.detail
+        : "Request failed";
+    throw new ApiError(detail, response.status);
+  }
+  return data as PublicProductCatalog;
 }
 
 export function startDiscovery(
