@@ -6,6 +6,7 @@ test("submits the public inquiry form without an authenticated session", async (
     expect(route.request().method()).toBe("POST");
     expect(payload).toMatchObject({
       product_line_id: "product-1",
+      product_item_id: "item-1",
       company_name: "Website Buyer Ltd",
       contact_name: "Mina Lee",
       email: "mina@buyer.example",
@@ -22,8 +23,10 @@ test("submits the public inquiry form without an authenticated session", async (
         id: "inquiry-1",
         organization_id: "org-1",
         product_line_id: "product-1",
+        product_item_id: "item-1",
         lead_id: null,
         status: "new",
+        product_item_name: "LED Floodlight 200W",
         company_name: payload.company_name,
         contact_name: payload.contact_name,
         email: payload.email,
@@ -38,8 +41,8 @@ test("submits the public inquiry form without an authenticated session", async (
     });
   });
 
-  await page.goto("/inquiry?organization_id=org-1&product_line_id=product-1&product=Industrial%20LED%20Lighting");
-  await expect(page.getByRole("heading", { name: "Industrial LED Lighting" })).toBeVisible();
+  await page.goto("/inquiry?organization_id=org-1&product_line_id=product-1&product_item_id=item-1&product=LED%20Floodlight%20200W");
+  await expect(page.getByRole("heading", { name: "LED Floodlight 200W" })).toBeVisible();
 
   await page.getByLabel("Company name").fill("Website Buyer Ltd");
   await page.getByLabel("Contact name").fill("Mina Lee");

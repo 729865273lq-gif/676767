@@ -11,6 +11,18 @@ export type ProductLine = {
   target_regions: string[];
   is_active: boolean;
   suppliers: string[];
+  product_items: ProductItem[];
+};
+
+export type ProductItem = {
+  id: string;
+  product_line_id: string;
+  name: string;
+  sku: string;
+  summary: string;
+  specs: string[];
+  image_url: string;
+  is_published: boolean;
 };
 
 export type CreateProductLinePayload = {
@@ -19,6 +31,15 @@ export type CreateProductLinePayload = {
   product_keywords: string[];
   buyer_profiles: string[];
   target_regions: string[];
+};
+
+export type ProductItemPayload = {
+  name: string;
+  sku?: string;
+  summary?: string;
+  specs?: string[];
+  image_url?: string;
+  is_published?: boolean;
 };
 
 export type DiscoveryRun = {
@@ -117,8 +138,10 @@ export type WebsiteInquiry = {
   id: string;
   organization_id: string;
   product_line_id: string | null;
+  product_item_id: string | null;
   lead_id: string | null;
   status: WebsiteInquiryStatus;
+  product_item_name: string;
   company_name: string;
   contact_name: string;
   email: string;
@@ -133,6 +156,7 @@ export type WebsiteInquiry = {
 
 export type WebsiteInquiryPayload = {
   product_line_id: string;
+  product_item_id?: string;
   company_name: string;
   contact_name: string;
   email: string;
@@ -213,6 +237,25 @@ export function createProductLine(session: Session, payload: CreateProductLinePa
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function createProductItem(session: Session, productLineId: string, payload: ProductItemPayload) {
+  return requestJson<ProductItem>(
+    session,
+    `/platform/organizations/${session.organization_id}/product-lines/${productLineId}/items`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function deleteProductItem(session: Session, productItemId: string) {
+  await requestJson<null>(
+    session,
+    `/platform/organizations/${session.organization_id}/product-items/${productItemId}`,
+    { method: "DELETE" }
+  );
 }
 
 export function startDiscovery(

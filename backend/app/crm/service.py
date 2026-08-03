@@ -82,6 +82,8 @@ class LeadService:
         *,
         organization_id: str,
         product_line_id: str,
+        product_item_id: str | None,
+        product_item_name: str,
         company_name: str,
         website: str,
         target_market: str,
@@ -110,6 +112,8 @@ class LeadService:
                 "website": normalized_website,
                 "target_market": target_market,
                 "buyer_profile": buyer_profile,
+                "product_item_id": product_item_id,
+                "product_item_name": product_item_name.strip(),
                 "actor_user_id": actor_user_id,
             },
             output_json={"source": "manual"},
@@ -265,6 +269,8 @@ class LeadService:
         *,
         organization_id: str,
         product_line_id: str,
+        product_item_id: str | None,
+        product_item_name: str,
         company_name: str,
         contact_name: str,
         email: str,
@@ -277,6 +283,8 @@ class LeadService:
         inquiry = WebsiteInquiry(
             organization_id=organization_id,
             product_line_id=product_line_id,
+            product_item_id=product_item_id,
+            product_item_name=product_item_name.strip(),
             company_name=company_name.strip(),
             contact_name=contact_name.strip(),
             email=email.strip(),
@@ -330,14 +338,17 @@ class LeadService:
             raise ValueError("product line is required to convert inquiry")
 
         website = inquiry.website.strip() or website_from_email(inquiry.email)
+        product_context = f"Product inquiry: {inquiry.product_item_name}\n\n" if inquiry.product_item_name else ""
         lead = self.create_manual_lead(
             organization_id=organization_id,
             product_line_id=inquiry.product_line_id,
+            product_item_id=inquiry.product_item_id,
+            product_item_name=inquiry.product_item_name,
             company_name=inquiry.company_name,
             website=website,
             target_market=inquiry.target_market or "Unspecified",
             buyer_profile="Website inquiry",
-            notes=inquiry.message,
+            notes=f"{product_context}{inquiry.message}",
             actor_user_id=actor_user_id,
         )
         lead.status = LeadStatus.INTERESTED
@@ -358,7 +369,11 @@ class LeadService:
                 lead_id=lead.id,
                 actor_user_id=actor_user_id,
                 activity_type="inquiry",
-                content=f"Website inquiry: {inquiry.message}",
+                content=(
+                    f"Website inquiry for {inquiry.product_item_name}: {inquiry.message}"
+                    if inquiry.product_item_name
+                    else f"Website inquiry: {inquiry.message}"
+                ),
                 next_follow_up_at=None,
             )
         )

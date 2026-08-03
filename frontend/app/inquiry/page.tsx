@@ -6,18 +6,20 @@ import { ApiError, submitWebsiteInquiry } from "../../lib/api";
 type InquiryContext = {
   organizationId: string;
   productLineId: string;
+  productItemId: string;
   productName: string;
   sourceUrl: string;
 };
 
 function readInquiryContext(): InquiryContext {
   if (typeof window === "undefined") {
-    return { organizationId: "", productLineId: "", productName: "", sourceUrl: "" };
+    return { organizationId: "", productLineId: "", productItemId: "", productName: "", sourceUrl: "" };
   }
   const params = new URLSearchParams(window.location.search);
   return {
     organizationId: params.get("organization_id") ?? "",
     productLineId: params.get("product_line_id") ?? "",
+    productItemId: params.get("product_item_id") ?? "",
     productName: params.get("product") ?? "our products",
     sourceUrl: window.location.href,
   };
@@ -27,6 +29,7 @@ export default function PublicInquiryPage() {
   const [context, setContext] = useState<InquiryContext>({
     organizationId: "",
     productLineId: "",
+    productItemId: "",
     productName: "",
     sourceUrl: "",
   });
@@ -51,6 +54,7 @@ export default function PublicInquiryPage() {
     try {
       await submitWebsiteInquiry(context.organizationId, {
         product_line_id: context.productLineId,
+        product_item_id: context.productItemId || undefined,
         company_name: String(form.get("company_name") ?? "").trim(),
         contact_name: String(form.get("contact_name") ?? "").trim(),
         email: String(form.get("email") ?? "").trim(),

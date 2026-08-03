@@ -112,6 +112,29 @@ class ProductSupplier(Base):
     )
 
 
+class ProductItem(Base):
+    __tablename__ = "product_items"
+    __table_args__ = (UniqueConstraint("product_line_id", "name", name="uq_product_item_name"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product_line_id: Mapped[str] = mapped_column(
+        ForeignKey("product_lines.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    sku: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    summary: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
+    specs: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    image_url: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
+    is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

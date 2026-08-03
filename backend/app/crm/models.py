@@ -185,6 +185,9 @@ class WebsiteInquiry(Base):
     product_line_id: Mapped[str | None] = mapped_column(
         ForeignKey("product_lines.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    product_item_id: Mapped[str | None] = mapped_column(
+        ForeignKey("product_items.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     lead_id: Mapped[str | None] = mapped_column(
         ForeignKey("leads.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -202,5 +205,6 @@ class WebsiteInquiry(Base):
     target_market: Mapped[str] = mapped_column(String(120), default="", nullable=False)
     message: Mapped[str] = mapped_column(String(4_000), nullable=False)
     source_url: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
+    product_item_name: Mapped[str] = mapped_column(String(200), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     converted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

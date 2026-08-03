@@ -38,6 +38,34 @@ test("creates a product line and displays discovered leads", async ({ page }) =>
         target_regions: payload.target_regions,
         is_active: true,
         suppliers: [],
+        product_items: [],
+      }),
+    });
+  });
+
+  await page.route(/\/platform\/organizations\/org-1\/product-lines\/product-1\/items$/, async (route) => {
+    const payload = route.request().postDataJSON();
+    expect(route.request().method()).toBe("POST");
+    expect(payload).toMatchObject({
+      name: "LED Floodlight 200W",
+      sku: "FL-200W",
+      summary: "High-output model for warehouse projects.",
+      specs: ["200W", "IP66", "CE"],
+      image_url: "https://brand.example/floodlight.jpg",
+      is_published: true,
+    });
+    await route.fulfill({
+      contentType: "application/json",
+      status: 201,
+      body: JSON.stringify({
+        id: "item-1",
+        product_line_id: "product-1",
+        name: payload.name,
+        sku: payload.sku,
+        summary: payload.summary,
+        specs: payload.specs,
+        image_url: payload.image_url,
+        is_published: payload.is_published,
       }),
     });
   });
@@ -120,6 +148,18 @@ test("creates a product line and displays discovered leads", async ({ page }) =>
   await expect(
     page.getByLabel("已配置产品线").getByText("Industrial LED lighting")
   ).toBeVisible();
+
+  const catalogForm = page.locator(".catalogForm");
+  await catalogForm.getByLabel("所属产品线").selectOption("product-1");
+  await catalogForm.getByLabel("产品名称").fill("LED Floodlight 200W");
+  await catalogForm.getByLabel("SKU / 型号").fill("FL-200W");
+  await catalogForm.getByLabel("图片 URL").fill("https://brand.example/floodlight.jpg");
+  await catalogForm.getByLabel("简短卖点").fill("High-output model for warehouse projects.");
+  await catalogForm.getByLabel("规格参数").fill("200W, IP66, CE");
+  await page.getByRole("button", { name: "保存产品" }).click();
+  await expect(page.getByLabel("产品目录列表").getByText("LED Floodlight 200W")).toBeVisible();
+  await expect(page.getByLabel("产品目录列表").getByText("product_item_id=item-1")).toBeVisible();
+
   await page.getByLabel("搜索产品线").selectOption("product-1");
   await page.getByLabel("搜索目标市场").fill("Germany");
   await page.getByLabel("搜索客户类型").selectOption("Distributor");

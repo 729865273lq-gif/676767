@@ -17,7 +17,15 @@ from app.crm.models import (
     LeadStatus,
     WebsiteInquiryStatus,
 )
-from app.platform.models import ConnectorCredential, MembershipRole, Organization, ProductLine, User, UserMembership
+from app.platform.models import (
+    ConnectorCredential,
+    MembershipRole,
+    Organization,
+    ProductItem,
+    ProductLine,
+    User,
+    UserMembership,
+)
 from app.shared.config import Settings
 from app.shared.db import Base
 from app.shared.security import PrincipalTokenCodec
@@ -192,6 +200,27 @@ def test_product_line_routes_enforce_roles_and_organization_scope() -> None:
         headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
         json={"name": "NOVA Lighting Factory", "website": "https://nova.example"},
     )
+    denied_item = client.post(
+        f"/platform/organizations/{client.acme_id}/product-lines/{product_line_id}/items",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={"name": "LED Floodlight 200W"},
+    )
+    product_item = client.post(
+        f"/platform/organizations/{client.acme_id}/product-lines/{product_line_id}/items",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
+        json={
+            "name": "LED Floodlight 200W",
+            "sku": "FL-200W",
+            "summary": "High-output outdoor LED floodlight.",
+            "specs": ["200W", "IP66", "CE"],
+            "image_url": "https://assets.example/floodlight.jpg",
+            "is_published": True,
+        },
+    )
+    listed_items = client.get(
+        f"/platform/organizations/{client.acme_id}/product-items?product_line_id={product_line_id}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
     listed = client.get(
         f"/platform/organizations/{client.acme_id}/product-lines",  # type: ignore[attr-defined]
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
@@ -205,9 +234,25 @@ def test_product_line_routes_enforce_roles_and_organization_scope() -> None:
     assert created.status_code == 201
     assert created.json()["product_keywords"] == ["LED floodlight", "warehouse lighting"]
     assert supplier.status_code == 201
+    assert denied_item.status_code == 403
+    assert product_item.status_code == 201
+    assert product_item.json()["sku"] == "FL-200W"
+    assert listed_items.status_code == 200
+    assert listed_items.json()[0]["name"] == "LED Floodlight 200W"
     assert listed.status_code == 200
     assert listed.json()[0]["suppliers"] == ["NOVA Lighting Factory"]
+    assert listed.json()[0]["product_items"][0]["summary"] == "High-output outdoor LED floodlight."
     assert cross_tenant.status_code == 403
+
+    deleted_item = client.delete(
+        f"/platform/organizations/{client.acme_id}/product-items/{product_item.json()['id']}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
+    )
+    with client.app.state.session_factory() as session:
+        removed = session.get(ProductItem, product_item.json()["id"])
+
+    assert deleted_item.status_code == 204
+    assert removed is None
 
 
 def test_discovery_lead_routes_return_evidence_only_within_the_organization() -> None:
@@ -327,11 +372,23 @@ def test_website_inquiry_api_accepts_public_submission_and_converts_to_customer(
         other_product_line = ProductLine(organization_id=client.globex_id, name="Other")  # type: ignore[attr-defined]
         session.add_all([product_line, other_product_line])
         session.flush()
+        product_item = ProductItem(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            product_line_id=product_line.id,
+            name="LED Floodlight 200W",
+            sku="FL-200W",
+            specs=["200W", "IP66"],
+            is_published=True,
+        )
+        session.add(product_item)
+        session.flush()
         product_line_id = product_line.id
+        product_item_id = product_item.id
         other_product_line_id = other_product_line.id
 
     payload = {
         "product_line_id": product_line_id,
+        "product_item_id": product_item_id,
         "company_name": "Inquiry Buyer Ltd",
         "contact_name": "Mina Lee",
         "email": "mina@buyer.example",
@@ -368,6 +425,8 @@ def test_website_inquiry_api_accepts_public_submission_and_converts_to_customer(
 
     assert submitted.status_code == 201
     assert submitted.json()["status"] == WebsiteInquiryStatus.NEW
+    assert submitted.json()["product_item_id"] == product_item_id
+    assert submitted.json()["product_item_name"] == "LED Floodlight 200W"
     assert submitted.json()["lead_id"] is None
     assert invalid_product.status_code == 404
     assert listed.status_code == 200
@@ -381,6 +440,7 @@ def test_website_inquiry_api_accepts_public_submission_and_converts_to_customer(
     assert converted.json()["lead"]["contacts"][0]["email"] == "mina@buyer.example"
     assert converted.json()["lead"]["contacts"][0]["is_primary"] is True
     assert converted.json()["lead"]["follow_ups"][0]["activity_type"] == "inquiry"
+    assert "LED Floodlight 200W" in converted.json()["lead"]["follow_ups"][0]["content"]
     assert "300 sample units" in converted.json()["lead"]["follow_ups"][0]["content"]
     assert duplicate_convert.status_code == 409
 

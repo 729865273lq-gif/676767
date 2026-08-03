@@ -7,10 +7,12 @@ import {
   createContact,
   createEmailDraft,
   createFollowUp,
+  createProductItem,
   createProductLine,
   createManualLead,
   deleteContact,
   deleteLead,
+  deleteProductItem,
   getLeadDetail,
   listEmailDrafts,
   listFollowUps,
@@ -28,6 +30,7 @@ import {
   type Lead,
   type LeadDetail,
   type LeadStatus,
+  type ProductItem,
   type ProductLine,
   type WebsiteInquiry,
   type WebsiteInquiryStatus,
@@ -162,6 +165,21 @@ function buildActivityCsv(
   return rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
 }
 
+function buildInquiryFormUrl(
+  formBaseUrl: string,
+  organizationId: string,
+  productLine: ProductLine,
+  productItem?: ProductItem
+) {
+  const params = new URLSearchParams({
+    organization_id: organizationId,
+    product_line_id: productLine.id,
+    product: productItem?.name ?? productLine.name,
+  });
+  if (productItem) params.set("product_item_id", productItem.id);
+  return `${formBaseUrl}?${params.toString()}`;
+}
+
 function ProductLineSetup({
   productLines,
   loading,
@@ -220,8 +238,128 @@ function ProductLineSetup({
                   {productLine.buyer_profiles.join(", ") || "暂无客户类型"} /{" "}
                   {productLine.target_regions.join(", ") || "暂无目标区域"}
                 </small>
+                <small>{(productLine.product_items ?? []).length} 个产品条目可用于独立站</small>
               </article>
             ))
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function ProductCatalogManager({
+  productLines,
+  selectedProductLineId,
+  organizationId,
+  creating,
+  deletingProductItemId,
+  onCreate,
+  onDelete,
+}: {
+  productLines: ProductLine[];
+  selectedProductLineId: string;
+  organizationId: string;
+  creating: boolean;
+  deletingProductItemId: string;
+  onCreate: (event: FormEvent<HTMLFormElement>) => void;
+  onDelete: (productItemId: string) => void;
+}) {
+  const [formOrigin, setFormOrigin] = useState("");
+  useEffect(() => {
+    setFormOrigin(window.location.origin);
+  }, []);
+  const formBaseUrl = formOrigin ? `${formOrigin}/inquiry` : "/inquiry";
+  const catalogItems = productLines.flatMap((productLine) =>
+    (productLine.product_items ?? []).map((productItem) => ({ productLine, productItem }))
+  );
+
+  return (
+    <section className="catalogPanel" aria-labelledby="product-catalog-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="sectionLabel">独立站内容底座</p>
+          <h2 id="product-catalog-title">产品目录</h2>
+        </div>
+        <span className="countBadge">{catalogItems.length} 个产品</span>
+      </div>
+      <div className="catalogContent">
+        <form className="catalogForm" onSubmit={onCreate}>
+          <label>
+            所属产品线
+            <select
+              key={selectedProductLineId || "catalog-product-line"}
+              name="product_line_id"
+              required
+              defaultValue={selectedProductLineId}
+            >
+              <option value="">选择产品线</option>
+              {productLines.map((productLine) => (
+                <option key={productLine.id} value={productLine.id}>{productLine.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            产品名称
+            <input name="name" required maxLength={200} placeholder="LED Floodlight 200W" />
+          </label>
+          <label>
+            SKU / 型号
+            <input name="sku" maxLength={120} placeholder="FL-200W" />
+          </label>
+          <label>
+            图片 URL
+            <input name="image_url" maxLength={1000} placeholder="https://example.com/product.jpg" />
+          </label>
+          <label className="wideField">
+            简短卖点
+            <textarea name="summary" maxLength={1000} placeholder="适合仓库、厂房、码头等场景，支持 OEM 规格定制。" />
+          </label>
+          <label className="wideField">
+            规格参数
+            <input name="specs" placeholder="200W, IP66, CE, 5 years warranty" />
+          </label>
+          <label className="checkboxField">
+            <input name="is_published" type="checkbox" defaultChecked />
+            可用于独立站公开表单
+          </label>
+          <button className="primaryButton" type="submit" disabled={creating || productLines.length === 0}>
+            {creating ? "保存中..." : "保存产品"}
+          </button>
+        </form>
+        <div className="catalogList" aria-label="产品目录列表">
+          {catalogItems.length === 0 ? (
+            <div className="emptyState">先维护产品条目。后续独立站页面、询盘表单和客户跟进都会引用这里的数据。</div>
+          ) : (
+            catalogItems.map(({ productLine, productItem }) => {
+              const url = buildInquiryFormUrl(formBaseUrl, organizationId, productLine, productItem);
+              return (
+                <article className="catalogItem" key={productItem.id}>
+                  <div>
+                    <strong>{productItem.name}</strong>
+                    <span>{productLine.name} / {productItem.sku || "未填 SKU"}</span>
+                    <small>{productItem.summary || "暂无卖点摘要"}</small>
+                    <small>{(productItem.specs ?? []).join(", ") || "暂无规格参数"}</small>
+                    <small>{url}</small>
+                    <small>{productItem.is_published ? "公开表单可用" : "仅后台留存"}</small>
+                  </div>
+                  <div className="catalogActions">
+                    <a className="textButton" href={url} target="_blank" rel="noreferrer">打开询盘表单</a>
+                    <button className="textButton" type="button" onClick={() => void navigator.clipboard.writeText(url)}>
+                      复制链接
+                    </button>
+                    <button
+                      className="dangerTextButton"
+                      type="button"
+                      disabled={deletingProductItemId === productItem.id}
+                      onClick={() => onDelete(productItem.id)}
+                    >
+                      {deletingProductItemId === productItem.id ? "删除中..." : "删除"}
+                    </button>
+                  </div>
+                </article>
+              );
+            })
           )}
         </div>
       </div>
@@ -613,8 +751,23 @@ function WebsiteInquiryPanel({
     setFormOrigin(window.location.origin);
   }, []);
   const formBaseUrl = formOrigin ? `${formOrigin}/inquiry` : "/inquiry";
-  const inquiryFormUrl = (productLine: ProductLine) =>
-    `${formBaseUrl}?organization_id=${encodeURIComponent(organizationId)}&product_line_id=${encodeURIComponent(productLine.id)}&product=${encodeURIComponent(productLine.name)}`;
+  const formLinks = productLines.flatMap((productLine) => {
+    const productItems = (productLine.product_items ?? []).filter((productItem) => productItem.is_published);
+    if (productItems.length === 0) {
+      return [{
+        id: productLine.id,
+        label: productLine.name,
+        detail: "产品线询盘链接",
+        url: buildInquiryFormUrl(formBaseUrl, organizationId, productLine),
+      }];
+    }
+    return productItems.map((productItem) => ({
+      id: productItem.id,
+      label: productItem.name,
+      detail: `${productLine.name} / ${productItem.sku || "未填 SKU"}`,
+      url: buildInquiryFormUrl(formBaseUrl, organizationId, productLine, productItem),
+    }));
+  });
 
   return (
     <section className="inquiryPanel" aria-labelledby="website-inquiry-title">
@@ -649,27 +802,25 @@ function WebsiteInquiryPanel({
         {productLines.length === 0 ? (
           <div className="emptyState inquiryEmpty">先创建产品线，再生成对应的公开询盘表单链接。</div>
         ) : (
-          productLines.map((productLine) => {
-            const url = inquiryFormUrl(productLine);
-            return (
-              <article className="inquiryLinkItem" key={productLine.id}>
+          formLinks.map((formLink) => (
+              <article className="inquiryLinkItem" key={formLink.id}>
                 <div>
-                  <strong>{productLine.name}</strong>
-                  <span>{url}</span>
+                  <strong>{formLink.label}</strong>
+                  <small>{formLink.detail}</small>
+                  <span>{formLink.url}</span>
                 </div>
                 <div>
-                  <a className="textButton" href={url} target="_blank" rel="noreferrer">打开表单</a>
+                  <a className="textButton" href={formLink.url} target="_blank" rel="noreferrer">打开表单</a>
                   <button
                     className="textButton"
                     type="button"
-                    onClick={() => void navigator.clipboard.writeText(url)}
+                    onClick={() => void navigator.clipboard.writeText(formLink.url)}
                   >
                     复制链接
                   </button>
                 </div>
               </article>
-            );
-          })
+          ))
         )}
       </div>
       {loading ? (
@@ -692,6 +843,7 @@ function WebsiteInquiryPanel({
               <p>{inquiry.message}</p>
               <div className="inquiryMeta">
                 <span>{inquiry.product_line_id ? productNameById.get(inquiry.product_line_id) ?? "产品线已停用" : "未绑定产品线"}</span>
+                <span>{inquiry.product_item_name || "未绑定具体产品"}</span>
                 <span>{inquiry.target_market || "未填写市场"}</span>
                 <span>{formatDateTime(inquiry.created_at)}</span>
               </div>
@@ -1179,6 +1331,8 @@ export default function HomePage() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [loadingProductLines, setLoadingProductLines] = useState(false);
   const [creatingProductLine, setCreatingProductLine] = useState(false);
+  const [creatingProductItem, setCreatingProductItem] = useState(false);
+  const [deletingProductItemId, setDeletingProductItemId] = useState("");
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
   const [selectedProductLineId, setSelectedProductLineId] = useState("");
   const [targetMarket, setTargetMarket] = useState("德国");
@@ -1395,6 +1549,57 @@ export default function HomePage() {
       handleApiFailure(caught, "无法创建产品线");
     } finally {
       setCreatingProductLine(false);
+    }
+  }
+
+  async function createProductItemFromForm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session) return;
+    const form = new FormData(event.currentTarget);
+    const productLineId = String(form.get("product_line_id") ?? "");
+    if (!productLineId) return;
+    setCreatingProductItem(true);
+    setError("");
+    try {
+      const created = await createProductItem(session, productLineId, {
+        name: String(form.get("name") ?? "").trim(),
+        sku: String(form.get("sku") ?? "").trim(),
+        summary: String(form.get("summary") ?? "").trim(),
+        specs: parseCsv(form.get("specs")),
+        image_url: String(form.get("image_url") ?? "").trim(),
+        is_published: form.get("is_published") === "on",
+      });
+      setProductLines((current) =>
+        current.map((productLine) =>
+          productLine.id === productLineId
+            ? { ...productLine, product_items: [...(productLine.product_items ?? []), created] }
+            : productLine
+        )
+      );
+      event.currentTarget.reset();
+    } catch (caught) {
+      handleApiFailure(caught, "无法保存产品条目");
+    } finally {
+      setCreatingProductItem(false);
+    }
+  }
+
+  async function deleteCatalogProductItem(productItemId: string) {
+    if (!session) return;
+    setDeletingProductItemId(productItemId);
+    setError("");
+    try {
+      await deleteProductItem(session, productItemId);
+      setProductLines((current) =>
+        current.map((productLine) => ({
+          ...productLine,
+          product_items: (productLine.product_items ?? []).filter((productItem) => productItem.id !== productItemId),
+        }))
+      );
+    } catch (caught) {
+      handleApiFailure(caught, "无法删除产品条目");
+    } finally {
+      setDeletingProductItemId("");
     }
   }
 
@@ -1757,6 +1962,15 @@ export default function HomePage() {
           {error && <div className="errorBanner" role="alert">{error}</div>}
           <section className="metricGrid" aria-label="销售指标">{dashboardMetrics.map((metric) => <MetricTile key={metric.label} {...metric} />)}</section>
           <ProductLineSetup productLines={productLines} loading={loadingProductLines} creating={creatingProductLine} onCreate={createProductLineFromForm} />
+          <ProductCatalogManager
+            productLines={productLines}
+            selectedProductLineId={selectedProductLineId}
+            organizationId={session.organization_id}
+            creating={creatingProductItem}
+            deletingProductItemId={deletingProductItemId}
+            onCreate={createProductItemFromForm}
+            onDelete={deleteCatalogProductItem}
+          />
           <CustomerAgent
             productLines={productLines}
             selectedProductLineId={selectedProductLineId}

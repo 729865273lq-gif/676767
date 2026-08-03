@@ -26,6 +26,7 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
           target_regions: ["欧洲", "北美"],
           is_active: true,
           suppliers: [],
+          product_items: [],
         },
       ]),
     });

@@ -9,6 +9,18 @@ const productLine = {
   target_regions: ["Europe"],
   is_active: true,
   suppliers: [],
+  product_items: [
+    {
+      id: "item-1",
+      product_line_id: "product-1",
+      name: "LED Floodlight 200W",
+      sku: "FL-200W",
+      summary: "High-output LED floodlight for industrial projects.",
+      specs: ["200W", "IP66"],
+      image_url: "",
+      is_published: true,
+    },
+  ],
 };
 
 const convertedLead = {
@@ -23,7 +35,7 @@ const convertedLead = {
   bucket: "needs_enrichment",
   status: "interested",
   owner_user_id: null,
-  notes: "Need quotation for 300 sample units and lead time.",
+  notes: "Product inquiry: LED Floodlight 200W\n\nNeed quotation for 300 sample units and lead time.",
   reasons: ["manual customer"],
   missing_signals: ["public evidence pending"],
   evidence: [
@@ -53,7 +65,7 @@ const convertedLead = {
       lead_id: "lead-inquiry-1",
       actor_user_id: "user-1",
       activity_type: "inquiry",
-      content: "Website inquiry: Need quotation for 300 sample units and lead time.",
+      content: "Website inquiry for LED Floodlight 200W: Need quotation for 300 sample units and lead time.",
       next_follow_up_at: null,
       created_at: "2026-08-03T08:00:00Z",
     },
@@ -78,8 +90,10 @@ test("converts a website inquiry into a CRM customer", async ({ page }) => {
     id: "inquiry-1",
     organization_id: "org-1",
     product_line_id: "product-1",
+    product_item_id: "item-1",
     lead_id: converted ? "lead-inquiry-1" : null,
     status: converted ? "converted" : "new",
+    product_item_name: "LED Floodlight 200W",
     company_name: "Website Buyer Ltd",
     contact_name: "Mina Lee",
     email: "mina@buyer.example",
@@ -149,14 +163,17 @@ test("converts a website inquiry into a CRM customer", async ({ page }) => {
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "独立站询盘" })).toBeVisible();
+  await expect(page.getByLabel("独立站表单链接").getByText("LED Floodlight 200W")).toBeVisible();
+  await expect(page.getByLabel("独立站表单链接").getByText("product_item_id=item-1")).toBeVisible();
   await expect(page.getByLabel("独立站询盘列表").getByText("Website Buyer Ltd")).toBeVisible();
+  await expect(page.getByLabel("独立站询盘列表").getByText("LED Floodlight 200W")).toBeVisible();
   await expect(page.getByLabel("独立站询盘列表").getByText("Need quotation for 300 sample units")).toBeVisible();
 
   await page.getByRole("button", { name: "转为 CRM 客户" }).click();
 
   await expect(page.getByLabel("客户详情").getByText("Website Buyer Ltd")).toBeVisible();
   await expect(page.locator(".contactList").getByText("Mina Lee")).toBeVisible();
-  await expect(page.locator(".followUpList").getByText("Website inquiry: Need quotation")).toBeVisible();
+  await expect(page.locator(".followUpList").getByText("Website inquiry for LED Floodlight 200W")).toBeVisible();
   await expect(page.getByLabel("CRM 客户列表").getByText("Website Buyer Ltd")).toBeVisible();
 
   await page.locator(".customerDrawer .closeButton").click();

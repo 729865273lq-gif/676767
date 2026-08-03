@@ -23,7 +23,7 @@ from app.crm.models import (
     WebsiteInquiryStatus,
 )
 from app.crm.service import LeadService
-from app.platform.product_lines import ProductLineNotFound, ProductLineService
+from app.platform.product_lines import ProductItemNotFound, ProductLineNotFound, ProductLineService
 from app.platform.router import current_principal, get_session
 from app.platform.service import OrganizationService
 from app.shared.security import SignedPrincipal
@@ -167,6 +167,7 @@ class LeadDetailResponse(LeadResponse):
 
 class WebsiteInquiryRequest(BaseModel):
     product_line_id: str = Field(min_length=1, max_length=36)
+    product_item_id: str | None = Field(default=None, max_length=36)
     company_name: str = Field(min_length=1, max_length=300)
     contact_name: str = Field(min_length=1, max_length=200)
     email: str = Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -181,6 +182,7 @@ class WebsiteInquiryResponse(BaseModel):
     id: str
     organization_id: str
     product_line_id: str | None
+    product_item_id: str | None
     lead_id: str | None
     status: WebsiteInquiryStatus
     company_name: str
@@ -191,6 +193,7 @@ class WebsiteInquiryResponse(BaseModel):
     target_market: str
     message: str
     source_url: str
+    product_item_name: str
     created_at: datetime
     converted_at: datetime | None
 
@@ -307,6 +310,7 @@ def website_inquiry_response(inquiry: WebsiteInquiry) -> WebsiteInquiryResponse:
         id=inquiry.id,
         organization_id=inquiry.organization_id,
         product_line_id=inquiry.product_line_id,
+        product_item_id=inquiry.product_item_id,
         lead_id=inquiry.lead_id,
         status=inquiry.status,
         company_name=inquiry.company_name,
@@ -317,6 +321,7 @@ def website_inquiry_response(inquiry: WebsiteInquiry) -> WebsiteInquiryResponse:
         target_market=inquiry.target_market,
         message=inquiry.message,
         source_url=inquiry.source_url,
+        product_item_name=inquiry.product_item_name,
         created_at=inquiry.created_at,
         converted_at=inquiry.converted_at,
     )
@@ -333,10 +338,21 @@ def submit_website_inquiry(
     session: Session = Depends(get_session),
 ) -> WebsiteInquiryResponse:
     try:
-        ProductLineService(session).get_product_line(payload.product_line_id, organization_id)
+        product_service = ProductLineService(session)
+        product_service.get_product_line(payload.product_line_id, organization_id)
+        product_item_name = ""
+        if payload.product_item_id:
+            product_item = product_service.get_product_item(
+                payload.product_item_id,
+                organization_id,
+                product_line_id=payload.product_line_id,
+            )
+            product_item_name = product_item.name
         inquiry = LeadService(session).create_website_inquiry(
             organization_id=organization_id,
             product_line_id=payload.product_line_id,
+            product_item_id=payload.product_item_id,
+            product_item_name=product_item_name,
             company_name=payload.company_name,
             contact_name=payload.contact_name,
             email=payload.email,
@@ -348,6 +364,9 @@ def submit_website_inquiry(
         )
         session.commit()
     except ProductLineNotFound as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except ProductItemNotFound as error:
         session.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
     return website_inquiry_response(inquiry)
@@ -430,6 +449,8 @@ def create_manual_lead(
         lead = service.create_manual_lead(
             organization_id=organization_id,
             product_line_id=payload.product_line_id,
+            product_item_id=None,
+            product_item_name="",
             company_name=payload.company_name,
             website=payload.website,
             target_market=payload.target_market,

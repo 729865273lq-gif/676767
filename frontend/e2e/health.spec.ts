@@ -26,6 +26,7 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
           target_regions: ["Europe", "North America"],
           is_active: true,
           suppliers: [],
+          product_items: [],
         },
       ]),
     });
