@@ -3,6 +3,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
+  convertWebsiteInquiry,
   createContact,
   createEmailDraft,
   createFollowUp,
@@ -15,6 +16,7 @@ import {
   listFollowUps,
   listLeads,
   listProductLines,
+  listWebsiteInquiries,
   markEmailDraftSent,
   reviewEmailDraft,
   startDiscovery,
@@ -27,6 +29,8 @@ import {
   type LeadDetail,
   type LeadStatus,
   type ProductLine,
+  type WebsiteInquiry,
+  type WebsiteInquiryStatus,
 } from "../lib/api";
 import { clearSession, readSession, type Session } from "../lib/auth";
 
@@ -37,7 +41,7 @@ type Metric = {
   tone: "blue" | "cyan" | "orange" | "green";
 };
 
-const navItems = ["总览", "客户搜索 Agent", "CRM", "邮件审核", "收件箱", "知识库"];
+const navItems = ["总览", "客户搜索 Agent", "CRM", "独立站询盘", "邮件审核", "收件箱", "知识库"];
 
 const bucketLabel = {
   priority_recommendation: "优先推荐",
@@ -60,6 +64,12 @@ const emailDraftStatusLabel: Record<EmailDraft["status"], string> = {
   ready_to_send: "待发送",
   sent: "已发送",
   rejected: "已驳回",
+};
+
+const websiteInquiryStatusLabel: Record<WebsiteInquiryStatus, string> = {
+  new: "新询盘",
+  converted: "已转客户",
+  dismissed: "已忽略",
 };
 
 function isCrmLead(lead: Lead) {
@@ -575,6 +585,100 @@ function CRMCustomerManager({
   );
 }
 
+function WebsiteInquiryPanel({
+  inquiries,
+  productLines,
+  loading,
+  convertingInquiryId,
+  statusFilter,
+  onStatusFilterChange,
+  onRefresh,
+  onConvert,
+}: {
+  inquiries: WebsiteInquiry[];
+  productLines: ProductLine[];
+  loading: boolean;
+  convertingInquiryId: string;
+  statusFilter: WebsiteInquiryStatus | "all";
+  onStatusFilterChange: (status: WebsiteInquiryStatus | "all") => void;
+  onRefresh: () => void;
+  onConvert: (inquiryId: string) => void;
+}) {
+  const productNameById = new Map(productLines.map((productLine) => [productLine.id, productLine.name]));
+  const newCount = inquiries.filter((inquiry) => inquiry.status === "new").length;
+
+  return (
+    <section className="inquiryPanel" aria-labelledby="website-inquiry-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="sectionLabel">独立站数据接口</p>
+          <h2 id="website-inquiry-title">独立站询盘</h2>
+        </div>
+        <div className="tableActions">
+          <label className="inlineFilter">
+            状态
+            <select
+              value={statusFilter}
+              onChange={(event) => onStatusFilterChange(event.currentTarget.value as WebsiteInquiryStatus | "all")}
+            >
+              <option value="new">新询盘</option>
+              <option value="converted">已转客户</option>
+              <option value="dismissed">已忽略</option>
+              <option value="all">全部</option>
+            </select>
+          </label>
+          <button className="textButton" type="button" onClick={onRefresh}>
+            刷新
+          </button>
+        </div>
+      </div>
+      <div className="inquirySummary">
+        <strong>{newCount}</strong>
+        <span>条新询盘可转入 CRM。未来独立站表单提交后，会先进入这里，由后台人工确认再转客户。</span>
+      </div>
+      {loading ? (
+        <div className="emptyState inquiryEmpty">正在加载独立站询盘...</div>
+      ) : inquiries.length === 0 ? (
+        <div className="emptyState inquiryEmpty">当前筛选下暂无询盘。后续独立站上线后，表单数据会进入这个队列。</div>
+      ) : (
+        <div className="inquiryList" aria-label="独立站询盘列表">
+          {inquiries.map((inquiry) => (
+            <article className="inquiryItem" key={inquiry.id}>
+              <div className="inquiryMain">
+                <div>
+                  <strong>{inquiry.company_name}</strong>
+                  <span>{inquiry.contact_name} / {inquiry.email}</span>
+                </div>
+                <span className={inquiry.status === "new" ? "status statusPriority" : "status statusQualified"}>
+                  {websiteInquiryStatusLabel[inquiry.status]}
+                </span>
+              </div>
+              <p>{inquiry.message}</p>
+              <div className="inquiryMeta">
+                <span>{inquiry.product_line_id ? productNameById.get(inquiry.product_line_id) ?? "产品线已停用" : "未绑定产品线"}</span>
+                <span>{inquiry.target_market || "未填写市场"}</span>
+                <span>{formatDateTime(inquiry.created_at)}</span>
+              </div>
+              <div className="inquiryActions">
+                {inquiry.website && <a href={inquiry.website} target="_blank" rel="noreferrer">官网</a>}
+                {inquiry.source_url && <a href={inquiry.source_url} target="_blank" rel="noreferrer">来源页</a>}
+                <button
+                  className="outlineButton"
+                  type="button"
+                  disabled={inquiry.status !== "new" || convertingInquiryId === inquiry.id}
+                  onClick={() => onConvert(inquiry.id)}
+                >
+                  {convertingInquiryId === inquiry.id ? "转换中..." : inquiry.status === "new" ? "转为 CRM 客户" : "已处理"}
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ReviewQueue({
   drafts,
   loading,
@@ -1061,6 +1165,10 @@ export default function HomePage() {
   const [loadingFollowUps, setLoadingFollowUps] = useState(false);
   const [emailDrafts, setEmailDrafts] = useState<EmailDraft[]>([]);
   const [loadingEmailDrafts, setLoadingEmailDrafts] = useState(false);
+  const [websiteInquiries, setWebsiteInquiries] = useState<WebsiteInquiry[]>([]);
+  const [loadingWebsiteInquiries, setLoadingWebsiteInquiries] = useState(false);
+  const [inquiryStatusFilter, setInquiryStatusFilter] = useState<WebsiteInquiryStatus | "all">("new");
+  const [convertingInquiryId, setConvertingInquiryId] = useState("");
   const [selectedDraftId, setSelectedDraftId] = useState("");
   const [savingEmailDraft, setSavingEmailDraft] = useState(false);
   const [reviewingEmailDraft, setReviewingEmailDraft] = useState(false);
@@ -1118,6 +1226,11 @@ export default function HomePage() {
       })
       .catch((caught: unknown) => handleApiFailure(caught, "无法加载邮件审批队列"))
       .finally(() => setLoadingEmailDrafts(false));
+    setLoadingWebsiteInquiries(true);
+    listWebsiteInquiries(currentSession, "new")
+      .then((items) => setWebsiteInquiries(items))
+      .catch((caught: unknown) => handleApiFailure(caught, "无法加载独立站询盘"))
+      .finally(() => setLoadingWebsiteInquiries(false));
   }, []);
 
   function handleApiFailure(caught: unknown, fallback: string) {
@@ -1157,6 +1270,45 @@ export default function HomePage() {
       handleApiFailure(caught, "无法刷新跟进记录");
     } finally {
       setLoadingFollowUps(false);
+    }
+  }
+
+  async function refreshWebsiteInquiries(nextStatusFilter = inquiryStatusFilter) {
+    if (!session) return;
+    setLoadingWebsiteInquiries(true);
+    try {
+      const items = await listWebsiteInquiries(session, nextStatusFilter);
+      setWebsiteInquiries(items);
+    } catch (caught) {
+      handleApiFailure(caught, "无法刷新独立站询盘");
+    } finally {
+      setLoadingWebsiteInquiries(false);
+    }
+  }
+
+  function changeInquiryStatusFilter(statusFilter: WebsiteInquiryStatus | "all") {
+    setInquiryStatusFilter(statusFilter);
+    void refreshWebsiteInquiries(statusFilter);
+  }
+
+  async function convertInquiryToCustomer(inquiryId: string) {
+    if (!session) return;
+    setConvertingInquiryId(inquiryId);
+    setError("");
+    try {
+      const converted = await convertWebsiteInquiry(session, inquiryId);
+      setWebsiteInquiries((current) =>
+        current.map((inquiry) => (inquiry.id === converted.inquiry.id ? converted.inquiry : inquiry))
+      );
+      setLeads((current) => [converted.lead, ...current.filter((lead) => lead.id !== converted.lead.id)]);
+      setSelectedLeadId(converted.lead.id);
+      setLeadDetail(converted.lead);
+      await refreshWebsiteInquiries();
+      await refreshFollowUps();
+    } catch (caught) {
+      handleApiFailure(caught, "无法把询盘转为 CRM 客户");
+    } finally {
+      setConvertingInquiryId("");
     }
   }
 
@@ -1590,6 +1742,16 @@ export default function HomePage() {
             onCreate={createManualLeadFromForm}
             onDelete={deleteCustomerLead}
             onOpenDetail={openLeadDetail}
+          />
+          <WebsiteInquiryPanel
+            inquiries={websiteInquiries}
+            productLines={productLines}
+            loading={loadingWebsiteInquiries}
+            convertingInquiryId={convertingInquiryId}
+            statusFilter={inquiryStatusFilter}
+            onStatusFilterChange={changeInquiryStatusFilter}
+            onRefresh={() => void refreshWebsiteInquiries()}
+            onConvert={convertInquiryToCustomer}
           />
           <div className="secondaryGrid">
             <ReviewQueue

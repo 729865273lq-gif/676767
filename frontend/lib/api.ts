@@ -111,6 +111,31 @@ export type ContactPayload = {
 
 export type EmailDraftStatus = "pending_approval" | "ready_to_send" | "sent" | "rejected";
 
+export type WebsiteInquiryStatus = "new" | "converted" | "dismissed";
+
+export type WebsiteInquiry = {
+  id: string;
+  organization_id: string;
+  product_line_id: string | null;
+  lead_id: string | null;
+  status: WebsiteInquiryStatus;
+  company_name: string;
+  contact_name: string;
+  email: string;
+  phone: string;
+  website: string;
+  target_market: string;
+  message: string;
+  source_url: string;
+  created_at: string;
+  converted_at: string | null;
+};
+
+export type WebsiteInquiryConversion = {
+  inquiry: WebsiteInquiry;
+  lead: LeadDetail;
+};
+
 export type EmailDraft = {
   id: string;
   organization_id: string;
@@ -275,6 +300,22 @@ export function listEmailDrafts(session: Session, statusFilter?: EmailDraftStatu
   return requestJson<EmailDraft[]>(
     session,
     `/discovery/organizations/${session.organization_id}/email-drafts${query}`
+  );
+}
+
+export function listWebsiteInquiries(session: Session, statusFilter?: WebsiteInquiryStatus | "all") {
+  const query = statusFilter && statusFilter !== "all" ? `?status_filter=${encodeURIComponent(statusFilter)}` : "";
+  return requestJson<WebsiteInquiry[]>(
+    session,
+    `/discovery/organizations/${session.organization_id}/website-inquiries${query}`
+  );
+}
+
+export function convertWebsiteInquiry(session: Session, inquiryId: string) {
+  return requestJson<WebsiteInquiryConversion>(
+    session,
+    `/discovery/organizations/${session.organization_id}/website-inquiries/${inquiryId}/convert`,
+    { method: "POST" }
   );
 }
 
