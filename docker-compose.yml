@@ -10,6 +10,11 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       BOCHA_API_KEY: ${BOCHA_API_KEY:-}
+      TOMTOM_API_KEY: ${TOMTOM_API_KEY:-}
+      GEOAPIFY_API_KEY: ${GEOAPIFY_API_KEY:-}
+      FOURSQUARE_API_KEY: ${FOURSQUARE_API_KEY:-}
+      TRADESPARQ_API_ID: ${TRADESPARQ_API_ID:-}
+      TRADESPARQ_API_SECRET: ${TRADESPARQ_API_SECRET:-}
     ports:
       - "8000:8000"
     volumes:
@@ -38,6 +43,8 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       BOCHA_API_KEY: ${BOCHA_API_KEY:-}
+      TRADESPARQ_API_ID: ${TRADESPARQ_API_ID:-}
+      TRADESPARQ_API_SECRET: ${TRADESPARQ_API_SECRET:-}
     volumes:
       - ./backend:/app
     depends_on:

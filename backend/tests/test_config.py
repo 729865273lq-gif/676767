@@ -48,3 +48,38 @@ def test_settings_reads_optional_bocha_api_key_without_making_it_required() -> N
 
     assert Settings.from_environment(values).bocha_api_key == "bocha-local-key"
     assert Settings.from_environment(valid_environment()).bocha_api_key is None
+
+
+def test_settings_reads_optional_tomtom_api_key_without_making_it_required() -> None:
+    values = valid_environment() | {"TOMTOM_API_KEY": "tomtom-local-key"}
+
+    assert Settings.from_environment(values).tomtom_api_key == "tomtom-local-key"
+    assert Settings.from_environment(valid_environment()).tomtom_api_key is None
+
+
+def test_settings_reads_optional_geoapify_api_key_without_making_it_required() -> None:
+    values = valid_environment() | {"GEOAPIFY_API_KEY": "geoapify-local-key"}
+
+    assert Settings.from_environment(values).geoapify_api_key == "geoapify-local-key"
+    assert Settings.from_environment(valid_environment()).geoapify_api_key is None
+
+
+def test_settings_reads_optional_foursquare_api_key_without_making_it_required() -> None:
+    values = valid_environment() | {"FOURSQUARE_API_KEY": "foursquare-local-key"}
+
+    assert Settings.from_environment(values).foursquare_api_key == "foursquare-local-key"
+    assert Settings.from_environment(valid_environment()).foursquare_api_key is None
+
+
+def test_settings_reads_optional_tradesparq_credentials() -> None:
+    values = valid_environment() | {
+        "TRADESPARQ_API_ID": "tradesparq-local-id",
+        "TRADESPARQ_API_SECRET": "tradesparq-local-secret",
+    }
+
+    settings = Settings.from_environment(values)
+
+    assert settings.tradesparq_api_id == "tradesparq-local-id"
+    assert settings.tradesparq_api_secret == "tradesparq-local-secret"
+    assert Settings.from_environment(valid_environment()).tradesparq_api_id is None
+    assert Settings.from_environment(valid_environment()).tradesparq_api_secret is None

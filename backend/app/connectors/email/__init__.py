@@ -4,7 +4,16 @@ from typing import Protocol
 
 from app.agents.base.contracts import OutboundMessage
 from app.connectors.base import Connector
+from app.connectors.email.smtp import EmailDeliveryConfigurationError, EmailDeliveryError, SmtpEmailConnector
 
 
 class EmailConnector(Connector, Protocol):
-    async def send(self, message: OutboundMessage, idempotency_key: str) -> str: ...
+    def send(self, message: OutboundMessage, idempotency_key: str) -> str: ...
+
+
+__all__ = [
+    "EmailConnector",
+    "EmailDeliveryConfigurationError",
+    "EmailDeliveryError",
+    "SmtpEmailConnector",
+]
