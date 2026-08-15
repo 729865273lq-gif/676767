@@ -525,9 +525,13 @@ class InboxService:
         if intent is not None:
             statement = statement.where(InboundMessage.intent == intent)
         if has_follow_up is not None:
-            open_task = select(FollowUpTask.id).where(
-                FollowUpTask.id == InboundMessage.follow_up_task_id,
-                FollowUpTask.status == FollowUpTaskStatus.OPEN,
+            open_task = (
+                select(FollowUpTask.id)
+                .where(
+                    FollowUpTask.id == InboundMessage.follow_up_task_id,
+                    FollowUpTask.status == FollowUpTaskStatus.OPEN,
+                )
+                .correlate(InboundMessage)
             )
             statement = statement.where(open_task.exists() if has_follow_up else ~open_task.exists())
         if due_from is not None or due_before is not None:

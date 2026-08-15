@@ -668,6 +668,14 @@ def test_router_filters_detail_and_follow_up_done() -> None:
     before = client.get(f"{base}?due_before=2026-03-01T00:00:00", headers=headers).json()
     assert [item["provider_message_id"] for item in before] == ["m1"]
 
+    # Combining has_follow_up with due filters must not auto-correlate FollowUpTask
+    # out of the EXISTS subquery (regression: previously raised InvalidRequestError).
+    open_in_range = client.get(
+        f"{base}?has_follow_up=true&due_from=2026-02-15T00:00:00", headers=headers
+    )
+    assert open_in_range.status_code == 200
+    assert [item["provider_message_id"] for item in open_in_range.json()] == ["m2"]
+
     detail = client.get(f"{base}/{m2_id}", headers=headers)
     assert detail.status_code == 200
     detail_body = detail.json()
@@ -707,6 +715,13 @@ def test_router_filters_detail_and_follow_up_done() -> None:
     # The done message reports status "done" in detail too.
     detail_after = client.get(f"{base}/{m2_id}", headers=headers).json()
     assert detail_after["follow_up_status"] == "done"
+
+    # has_follow_up=false combined with due filters (m2's task is now done).
+    closed_in_range = client.get(
+        f"{base}?has_follow_up=false&due_from=2026-02-15T00:00:00", headers=headers
+    )
+    assert closed_in_range.status_code == 200
+    assert [item["provider_message_id"] for item in closed_in_range.json()] == ["m2"]
 
     conflict = client.post(f"{base}/{m3_id}/follow-up/done", headers=headers)
     assert conflict.status_code == 409
