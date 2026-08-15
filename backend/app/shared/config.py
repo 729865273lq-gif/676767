@@ -19,6 +19,12 @@ class Settings:
     database_url: str
     redis_url: str
     s3_endpoint: str
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+    s3_bucket: str = "foreign-trade"
+    embedding_api_base: str | None = None
+    embedding_api_key: str | None = None
+    embedding_model: str = "BAAI/bge-m3"
     bocha_api_key: str | None = None
     google_cse_api_key: str | None = None
     google_cse_cx: str | None = None
@@ -65,6 +71,13 @@ class Settings:
             ),
             redis_url=environment.get("REDIS_URL", "redis://redis:6379/0"),
             s3_endpoint=environment.get("S3_ENDPOINT", "http://minio:9000"),
+            s3_access_key=environment.get("S3_ACCESS_KEY", "minioadmin").strip() or "minioadmin",
+            s3_secret_key=environment.get("S3_SECRET_KEY", "minioadmin").strip() or "minioadmin",
+            s3_bucket=environment.get("S3_BUCKET", "foreign-trade").strip() or "foreign-trade",
+            embedding_api_base=_optional_secret(environment, "EMBEDDING_API_BASE")
+            or "https://api.siliconflow.cn/v1",
+            embedding_api_key=_optional_secret(environment, "EMBEDDING_API_KEY"),
+            embedding_model=environment.get("EMBEDDING_MODEL", "BAAI/bge-m3").strip() or "BAAI/bge-m3",
             bocha_api_key=_optional_secret(environment, "BOCHA_API_KEY"),
             google_cse_api_key=_optional_secret(environment, "GOOGLE_CSE_API_KEY"),
             google_cse_cx=_optional_secret(environment, "GOOGLE_CSE_CX"),

@@ -7,7 +7,13 @@ from sqlalchemy.orm import sessionmaker
 from app.connectors.contact_discovery import ContactDiscoveryConnector
 from app.connectors.email import EmailConnector
 from app.connectors.email_verification import EmailVerificationConnector
+from app.connectors.llm import (
+    EmbeddingConfigurationError,
+    EmbeddingConnector,
+    OpenAICompatibleEmbeddingConnector,
+)
 from app.connectors.search import SearchConnector
+from app.connectors.storage import S3StorageConnector, StorageConnector
 from app.shared.config import Settings
 from app.shared.db import build_session_factory
 
@@ -18,6 +24,13 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     if not hasattr(app.state, "session_factory"):
         app.state.session_factory = build_session_factory(settings.database_url)
+    if not hasattr(app.state, "storage_connector"):
+        app.state.storage_connector = S3StorageConnector.from_settings(settings)
+    if not hasattr(app.state, "embedding_connector"):
+        try:
+            app.state.embedding_connector = OpenAICompatibleEmbeddingConnector.from_settings(settings)
+        except EmbeddingConfigurationError:
+            app.state.embedding_connector = None
     yield
 
 
@@ -28,6 +41,9 @@ def create_app(
     contact_discovery_connector: ContactDiscoveryConnector | None = None,
     email_verification_connector: EmailVerificationConnector | None = None,
     search_connector: SearchConnector | None = None,
+    embedding_connector: EmbeddingConnector | None = None,
+    storage_connector: StorageConnector | None = None,
+    vector_store: object | None = None,
 ) -> FastAPI:
     app = FastAPI(title="AI Foreign Trade Sales Platform", lifespan=lifespan)
     app.add_middleware(
@@ -48,6 +64,12 @@ def create_app(
         app.state.email_verification_connector = email_verification_connector
     if search_connector is not None:
         app.state.search_connector = search_connector
+    if embedding_connector is not None:
+        app.state.embedding_connector = embedding_connector
+    if storage_connector is not None:
+        app.state.storage_connector = storage_connector
+    if vector_store is not None:
+        app.state.vector_store = vector_store
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -56,10 +78,12 @@ def create_app(
     from app.platform.router import router as platform_router
     from app.agents.customer.router import router as discovery_router
     from app.workflow.router import router as workflow_router
+    from app.knowledge.router import router as knowledge_router
 
     app.include_router(platform_router)
     app.include_router(discovery_router)
     app.include_router(workflow_router)
+    app.include_router(knowledge_router)
 
     return app
 

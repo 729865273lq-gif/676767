@@ -416,6 +416,20 @@ export type EmailDraft = {
   send_risk_message: string;
 };
 
+export type KnowledgeDocumentStatus = "uploaded" | "processing" | "ready" | "failed";
+
+export type KnowledgeDocument = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  status: KnowledgeDocumentStatus;
+  product_line_id: string | null;
+  failure_message?: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -848,4 +862,42 @@ export function markEmailDraftSent(session: Session, draftId: string) {
     `/discovery/organizations/${session.organization_id}/email-drafts/${draftId}/send`,
     { method: "POST" }
   );
+}
+
+export function listKnowledgeDocuments(session: Session) {
+  return requestJson<KnowledgeDocument[]>(
+    session,
+    `/knowledge/organizations/${session.organization_id}/documents`
+  );
+}
+
+export async function uploadKnowledgeDocument(
+  session: Session,
+  file: File,
+  productLineId?: string
+) {
+  const form = new FormData();
+  form.append("file", file);
+  if (productLineId) form.append("product_line_id", productLineId);
+  const response = await fetch(
+    `${apiUrl}/knowledge/organizations/${session.organization_id}/documents`,
+    {
+      method: "POST",
+      headers: { ...authHeaders(session) },
+      body: form,
+    }
+  );
+  const data: unknown = await response.json().catch(() => null);
+  if (response.status === 401) clearSession();
+  if (!response.ok) {
+    const detail =
+      typeof data === "object" &&
+      data !== null &&
+      "detail" in data &&
+      typeof data.detail === "string"
+        ? data.detail
+        : "Request failed";
+    throw new ApiError(detail, response.status);
+  }
+  return data as KnowledgeDocument;
 }

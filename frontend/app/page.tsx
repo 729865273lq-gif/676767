@@ -26,6 +26,7 @@ import {
   listEmailDrafts,
   listFollowUpTasks,
   listFollowUps,
+  listKnowledgeDocuments,
   listLeads,
   listProductLines,
   listSearchSources,
@@ -40,6 +41,7 @@ import {
   updateLeadDetail,
   updateQuoteDraft,
   updateSearchSource,
+  uploadKnowledgeDocument,
   verifyContactEmail,
   type ContactRecord,
   type BatchContactDiscoveryItem,
@@ -48,6 +50,8 @@ import {
   type DiscoveryRun,
   type EmailDeliveryStatus,
   type EmailDraft,
+  type KnowledgeDocument,
+  type KnowledgeDocumentStatus,
   type FollowUpRecord,
   type FollowUpTask,
   type FollowUpTaskStatus,
@@ -85,7 +89,8 @@ type ActionSignal = {
 };
 
 const API_STATUS_NAV = "API 接口状态";
-const navItems = ["总览", "客户搜索 Agent", "CRM", "独立站询盘", API_STATUS_NAV, "邮件审核", "收件箱", "知识库"];
+const KNOWLEDGE_NAV = "知识库";
+const navItems = ["总览", "客户搜索 Agent", "CRM", "独立站询盘", API_STATUS_NAV, "邮件审核", "收件箱", KNOWLEDGE_NAV];
 
 const bucketLabel = {
   priority_recommendation: "优先推荐",
@@ -1663,6 +1668,104 @@ function ApiStatusPage({
   );
 }
 
+const knowledgeStatusLabel: Record<KnowledgeDocumentStatus, string> = {
+  uploaded: "已上传",
+  processing: "处理中",
+  ready: "就绪",
+  failed: "失败",
+};
+
+function knowledgeStatusClass(status: KnowledgeDocumentStatus) {
+  if (status === "ready") return "kbStatus kbReady";
+  if (status === "processing") return "kbStatus kbProcessing";
+  if (status === "failed") return "kbStatus kbFailed";
+  return "kbStatus kbUploaded";
+}
+
+function KnowledgeBasePanel({
+  documents,
+  productLines,
+  isAdmin,
+  loading,
+  uploading,
+  onCreate,
+  onRefresh,
+}: {
+  documents: KnowledgeDocument[];
+  productLines: ProductLine[];
+  isAdmin: boolean;
+  loading: boolean;
+  uploading: boolean;
+  onCreate: (event: FormEvent<HTMLFormElement>) => void;
+  onRefresh: () => void;
+}) {
+  const productLineNameById = new Map(productLines.map((line) => [line.id, line.name]));
+  return (
+    <section className="knowledgePanel" aria-labelledby="knowledge-title">
+      <div className="sectionHeader">
+        <div>
+          <p className="sectionLabel">知识库</p>
+          <h2 id="knowledge-title">组织知识库</h2>
+        </div>
+        <div className="tableActions">
+          <span className="countBadge">{loading ? "加载中" : `${documents.length} 个文档`}</span>
+          <button className="textButton" type="button" onClick={onRefresh}>刷新</button>
+        </div>
+      </div>
+      {isAdmin && (
+        <form className="knowledgeForm" onSubmit={onCreate}>
+          <label>
+            产品线（可选）
+            <select name="product_line_id" defaultValue="">
+              <option value="">不绑定产品线</option>
+              {productLines.map((line) => (
+                <option key={line.id} value={line.id}>{line.name}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            上传文档（PDF / DOCX / XLSX）
+            <input name="file" type="file" accept=".pdf,.docx,.xlsx" required />
+          </label>
+          <button className="primaryButton" type="submit" disabled={uploading}>
+            {uploading ? "上传处理中..." : "上传文档"}
+          </button>
+        </form>
+      )}
+      {loading ? (
+        <div className="emptyState knowledgeEmpty">正在加载知识库文档...</div>
+      ) : documents.length === 0 ? (
+        <div className="emptyState knowledgeEmpty">
+          {isAdmin
+            ? "上传 PDF、DOCX 或 XLSX 文档，系统会自动切分并向量化，供后续邮件上下文检索使用。"
+            : "暂无知识库文档。"}
+        </div>
+      ) : (
+        <div className="knowledgeList" aria-label="知识库文档列表">
+          {documents.map((document) => (
+            <article className="knowledgeItem" key={document.id}>
+              <div className="knowledgeItemMain">
+                <strong>{document.filename}</strong>
+                <span>
+                  {document.product_line_id
+                    ? productLineNameById.get(document.product_line_id) ?? "产品线已停用"
+                    : "未绑定产品线"}{" "}/ {formatDateTime(document.created_at)}
+                </span>
+              </div>
+              <span className={knowledgeStatusClass(document.status)}>
+                {knowledgeStatusLabel[document.status] ?? document.status}
+              </span>
+              {isAdmin && document.failure_message ? (
+                <small className="knowledgeFailure">{document.failure_message}</small>
+              ) : null}
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function FollowUpTimeline({
   records,
   loading,
@@ -2598,6 +2701,9 @@ export default function HomePage() {
   const [runMessage, setRunMessage] = useState("请创建或选择产品线后开始搜索");
   const [priorityOnly, setPriorityOnly] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
+  const [loadingKnowledgeDocuments, setLoadingKnowledgeDocuments] = useState(false);
+  const [uploadingKnowledgeDocument, setUploadingKnowledgeDocument] = useState(false);
   const [error, setError] = useState("");
 
   const selectedProductLine = useMemo(
@@ -2683,6 +2789,11 @@ export default function HomePage() {
       .then((items) => setWebsiteInquiries(items))
       .catch((caught: unknown) => handleApiFailure(caught, "无法加载独立站询盘"))
       .finally(() => setLoadingWebsiteInquiries(false));
+    setLoadingKnowledgeDocuments(true);
+    listKnowledgeDocuments(currentSession)
+      .then((items) => setKnowledgeDocuments(items))
+      .catch((caught: unknown) => handleApiFailure(caught, "无法加载知识库文档"))
+      .finally(() => setLoadingKnowledgeDocuments(false));
   }, []);
 
   function handleApiFailure(caught: unknown, fallback: string) {
@@ -2776,6 +2887,39 @@ export default function HomePage() {
   function changeInquiryStatusFilter(statusFilter: WebsiteInquiryStatus | "all") {
     setInquiryStatusFilter(statusFilter);
     void refreshWebsiteInquiries(statusFilter);
+  }
+
+  async function refreshKnowledgeDocuments() {
+    if (!session) return;
+    setLoadingKnowledgeDocuments(true);
+    try {
+      const items = await listKnowledgeDocuments(session);
+      setKnowledgeDocuments(items);
+    } catch (caught) {
+      handleApiFailure(caught, "无法刷新知识库文档");
+    } finally {
+      setLoadingKnowledgeDocuments(false);
+    }
+  }
+
+  async function uploadKnowledgeDocumentFromForm(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session) return;
+    const form = new FormData(event.currentTarget);
+    const file = form.get("file");
+    if (!(file instanceof File)) return;
+    const productLineId = String(form.get("product_line_id") ?? "").trim();
+    setUploadingKnowledgeDocument(true);
+    setError("");
+    try {
+      const created = await uploadKnowledgeDocument(session, file, productLineId || undefined);
+      setKnowledgeDocuments((current) => [created, ...current]);
+      event.currentTarget.reset();
+    } catch (caught) {
+      handleApiFailure(caught, "无法上传知识库文档");
+    } finally {
+      setUploadingKnowledgeDocument(false);
+    }
   }
 
   async function toggleSearchSource(sourceId: string, enabled: boolean) {
@@ -3758,6 +3902,16 @@ export default function HomePage() {
               updatingSourceId={updatingSearchSourceId}
               onSourceToggle={toggleSearchSource}
               onRefresh={() => void refreshApiStatus()}
+            />
+          ) : activeNav === KNOWLEDGE_NAV ? (
+            <KnowledgeBasePanel
+              documents={knowledgeDocuments}
+              productLines={productLines}
+              isAdmin={session.organization_role === "admin"}
+              loading={loadingKnowledgeDocuments}
+              uploading={uploadingKnowledgeDocument}
+              onCreate={uploadKnowledgeDocumentFromForm}
+              onRefresh={() => void refreshKnowledgeDocuments()}
             />
           ) : (
           <>
