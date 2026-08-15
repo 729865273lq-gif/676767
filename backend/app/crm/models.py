@@ -45,6 +45,11 @@ class FollowUpTaskStatus(StrEnum):
     DONE = "done"
 
 
+class QuoteDraftStatus(StrEnum):
+    DRAFT = "draft"
+    SENT = "sent"
+
+
 class Lead(Base):
     __tablename__ = "leads"
     __table_args__ = (UniqueConstraint("organization_id", "canonical_domain", name="uq_lead_domain"),)
@@ -79,6 +84,19 @@ class Lead(Base):
     notes: Mapped[str] = mapped_column(String(4_000), default="", nullable=False)
     reasons: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     missing_signals: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    contact_discovery_status: Mapped[str] = mapped_column(
+        String(30), default="not_scanned", nullable=False, index=True
+    )
+    contact_discovery_message: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    contact_discovered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    contact_email_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    contact_phone_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    contact_social_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    last_discovered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, nullable=False, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
@@ -163,8 +181,52 @@ class CRMContact(Base):
     phone: Mapped[str] = mapped_column(String(80), default="", nullable=False)
     linkedin_url: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
     whatsapp: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    social_profiles: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list, nullable=False)
+    source_url: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
+    email_verification_provider: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    email_verification_status: Mapped[str] = mapped_column(String(80), default="", nullable=False)
+    email_verification_sub_status: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+
+class QuoteDraft(Base):
+    __tablename__ = "quote_drafts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    lead_id: Mapped[str] = mapped_column(
+        ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    product_line_id: Mapped[str] = mapped_column(
+        ForeignKey("product_lines.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    sent_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    status: Mapped[QuoteDraftStatus] = mapped_column(
+        Enum(QuoteDraftStatus, native_enum=False, length=20),
+        default=QuoteDraftStatus.DRAFT,
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), default="USD", nullable=False)
+    incoterm: Mapped[str] = mapped_column(String(20), default="FOB", nullable=False)
+    valid_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    line_items: Mapped[list[dict[str, str | float | int]]] = mapped_column(JSON, default=list, nullable=False)
+    notes: Mapped[str] = mapped_column(String(2_000), default="", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class EmailDraft(Base):
@@ -200,6 +262,8 @@ class EmailDraft(Base):
     )
     subject: Mapped[str] = mapped_column(String(300), nullable=False)
     body: Mapped[str] = mapped_column(String(8_000), nullable=False)
+    recipient_email: Mapped[str] = mapped_column(String(320), default="", nullable=False)
+    provider_message_id: Mapped[str] = mapped_column(String(255), default="", nullable=False)
     evidence_snapshot: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list, nullable=False)
     rejection_reason: Mapped[str] = mapped_column(String(1_000), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

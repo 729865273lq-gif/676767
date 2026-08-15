@@ -72,6 +72,24 @@ class ConnectorCredential(Base):
     )
 
 
+class SearchSourcePreference(Base):
+    __tablename__ = "search_source_preferences"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "source_id", name="uq_search_source_preference"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
 class ProductLine(Base):
     __tablename__ = "product_lines"
     __table_args__ = (UniqueConstraint("organization_id", "name", name="uq_product_line_name"),)
@@ -85,6 +103,7 @@ class ProductLine(Base):
     product_keywords: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     buyer_profiles: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     target_regions: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    excluded_keywords: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(

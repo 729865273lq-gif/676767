@@ -9,8 +9,13 @@ from sqlalchemy.orm import Session
 
 from app.platform.credentials import CredentialCipher, CredentialService
 from app.platform.auth import AuthService
-from app.platform.models import Organization, UserMembership
-from app.platform.product_lines import ProductItemNotFound, ProductLineNotFound, ProductLineService
+from app.platform.models import Organization, SearchSourcePreference, UserMembership
+from app.platform.product_lines import (
+    ProductItemNotFound,
+    ProductLineInUse,
+    ProductLineNotFound,
+    ProductLineService,
+)
 from app.platform.service import OrganizationService, TenantAccessDenied
 from app.shared.security import InvalidPrincipalToken, PrincipalTokenCodec, SignedPrincipal
 import time
@@ -44,12 +49,55 @@ class CredentialResponse(BaseModel):
     last_four: str
 
 
+class EmailDeliveryStatusResponse(BaseModel):
+    provider: str
+    configured: bool
+    from_email: str | None
+    from_name: str
+    missing: list[str]
+
+
+class ConnectorStatusResponse(BaseModel):
+    connector_id: str
+    label: str
+    provider: str
+    purpose: str
+    configured: bool
+    missing: list[str]
+
+
+class CustomerDevelopmentConnectorsResponse(BaseModel):
+    connectors: list[ConnectorStatusResponse]
+
+
+class SearchSourceResponse(BaseModel):
+    source_id: str
+    label: str
+    provider: str
+    category: str
+    purpose: str
+    base_url: str
+    enabled: bool
+    configured: bool
+    status: str
+    missing: list[str]
+
+
+class SearchSourcesResponse(BaseModel):
+    sources: list[SearchSourceResponse]
+
+
+class UpdateSearchSourceRequest(BaseModel):
+    enabled: bool
+
+
 class ProductLineRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = Field(default="", max_length=5_000)
     product_keywords: list[str] = Field(default_factory=list, max_length=100)
     buyer_profiles: list[str] = Field(default_factory=list, max_length=100)
     target_regions: list[str] = Field(default_factory=list, max_length=100)
+    excluded_keywords: list[str] = Field(default_factory=list, max_length=100)
 
 
 class ProductItemRequest(BaseModel):
@@ -79,6 +127,7 @@ class ProductLineResponse(BaseModel):
     product_keywords: list[str]
     buyer_profiles: list[str]
     target_regions: list[str]
+    excluded_keywords: list[str]
     is_active: bool
     suppliers: list[str]
     product_items: list[ProductItemResponse]
@@ -153,6 +202,159 @@ def _authentication_error() -> HTTPException:
     )
 
 
+def search_source_catalog(settings) -> list[dict[str, object]]:
+    return [
+        {
+            "source_id": "tomtom",
+            "label": "TomTom 地图客户搜索",
+            "provider": "TomTom Search API",
+            "category": "map_search",
+            "purpose": "按行业和市场搜索海外企业，获取名称、地址、公开电话与官网",
+            "base_url": "https://developer.tomtom.com/search-api",
+            "status": "needs_config",
+            "required": {"TOMTOM_API_KEY": settings.tomtom_api_key},
+            "default_enabled": True,
+        },
+        {
+            "source_id": "geoapify",
+            "label": "Geoapify 地图客户搜索",
+            "provider": "Geoapify Places API",
+            "category": "map_search",
+            "purpose": "按目标市场搜索企业、工厂和贸易商，并补充公开电话、官网与邮箱",
+            "base_url": "https://www.geoapify.com/places-api/",
+            "status": "needs_config",
+            "required": {"GEOAPIFY_API_KEY": settings.geoapify_api_key},
+            "default_enabled": True,
+        },
+        {
+            "source_id": "foursquare",
+            "label": "Foursquare 地图客户搜索",
+            "provider": "Foursquare Places API",
+            "category": "map_search",
+            "purpose": "按行业和目标地区搜索商家，并读取公开电话、官网和社交媒体",
+            "base_url": "https://foursquare.com/",
+            "status": "needs_config",
+            "required": {"FOURSQUARE_API_KEY": settings.foursquare_api_key},
+            "default_enabled": True,
+        },
+        {
+            "source_id": "openstreetmap",
+            "label": "OpenStreetMap 企业搜索",
+        "provider": "OpenStreetMap Nominatim + Overpass",
+            "category": "map_search",
+            "purpose": "搜索全球公开企业地点，并读取官网、电话与社交联系方式标签",
+            "base_url": "https://www.openstreetmap.org",
+            "status": "ready",
+            "required": {},
+            "default_enabled": True,
+        },
+        {
+            "source_id": "bocha",
+            "label": "公开网页搜索",
+            "provider": "Bocha",
+            "category": "web_search",
+            "purpose": "按产品关键词和目标市场搜索潜在客户官网",
+            "base_url": "https://bochaai.com",
+            "status": "ready",
+            "required": {"BOCHA_API_KEY": settings.bocha_api_key},
+            "default_enabled": True,
+        },
+        {
+            "source_id": "google_cse",
+            "label": "Google 可编程搜索",
+            "provider": "Google Programmable Search",
+            "category": "web_search",
+            "purpose": "补充全球网页搜索结果，适合行业关键词和地区组合搜索",
+            "base_url": "https://programmablesearchengine.google.com",
+            "status": "needs_config",
+            "required": {
+                "GOOGLE_CSE_API_KEY": settings.google_cse_api_key,
+                "GOOGLE_CSE_CX": settings.google_cse_cx,
+            },
+            "default_enabled": False,
+        },
+        {
+            "source_id": "google_places",
+            "label": "Google 地图客户搜索",
+            "provider": "Google Places",
+            "category": "map_search",
+            "purpose": "按行业和地区搜索企业，获取官网、公开电话与地图来源链接",
+            "base_url": "https://maps.google.com",
+            "status": "needs_config",
+            "required": {"GOOGLE_PLACES_API_KEY": settings.google_places_api_key},
+            "default_enabled": False,
+        },
+        {
+            "source_id": "serpapi",
+            "label": "搜索结果 API",
+            "provider": "SerpAPI",
+            "category": "web_search",
+            "purpose": "补充 Google/Bing 等搜索结果，适合多市场客户搜索",
+            "base_url": "https://serpapi.com",
+            "status": "needs_config",
+            "required": {"SERPAPI_API_KEY": settings.serpapi_api_key},
+            "default_enabled": False,
+        },
+        {
+            "source_id": "dataforseo",
+            "label": "SEO 搜索数据",
+            "provider": "DataForSEO",
+            "category": "web_search",
+            "purpose": "通过搜索数据 API 扩展行业与地区客户发现",
+            "base_url": "https://dataforseo.com",
+            "status": "needs_config",
+            "required": {
+                "DATAFORSEO_LOGIN": settings.dataforseo_login,
+                "DATAFORSEO_PASSWORD": settings.dataforseo_password,
+            },
+            "default_enabled": False,
+        },
+        {
+            "source_id": "apollo_companies",
+            "label": "公司数据库",
+            "provider": "Apollo",
+            "category": "company_database",
+            "purpose": "按行业、地区和职位线索补充公司与联系人信息",
+            "base_url": "https://apollo.io",
+            "status": "needs_config",
+            "required": {"APOLLO_API_KEY": settings.apollo_api_key},
+            "default_enabled": False,
+        },
+        {
+            "source_id": "b2b_directories",
+            "label": "B2B 目录网站",
+            "provider": "Alibaba / Global Sources / Made-in-China / Europages / Kompass",
+            "category": "planned_connector",
+            "purpose": "预留外贸目录站接入口，后续按网站逐个实现抓取或 API 导入",
+            "base_url": "",
+            "status": "planned",
+            "required": {},
+            "default_enabled": False,
+        },
+    ]
+
+
+def search_source_response(source: dict[str, object], preference: SearchSourcePreference | None) -> SearchSourceResponse:
+    required = source["required"]
+    assert isinstance(required, dict)
+    missing = [name for name, value in required.items() if not value]
+    status = str(source["status"])
+    configured = status == "planned" or not missing
+    default_enabled = bool(source["default_enabled"])
+    return SearchSourceResponse(
+        source_id=str(source["source_id"]),
+        label=str(source["label"]),
+        provider=str(source["provider"]),
+        category=str(source["category"]),
+        purpose=str(source["purpose"]),
+        base_url=str(source["base_url"]),
+        enabled=preference.enabled if preference is not None else default_enabled,
+        configured=configured,
+        status=status if configured else "needs_config",
+        missing=missing,
+    )
+
+
 @router.get("/organizations/{organization_id}/membership")
 def get_membership(
     organization_id: str,
@@ -199,6 +401,219 @@ def create_credential(
         last_four=credential.last_four,
     )
 
+
+@router.get(
+    "/organizations/{organization_id}/email-delivery",
+    response_model=EmailDeliveryStatusResponse,
+)
+def get_email_delivery_status(
+    organization_id: str,
+    request: Request,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> EmailDeliveryStatusResponse:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+    except TenantAccessDenied as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+
+    settings = request.app.state.settings
+    required_fields = {
+        "SMTP_HOST": settings.smtp_host,
+        "SMTP_USERNAME": settings.smtp_username,
+        "SMTP_PASSWORD": settings.smtp_password,
+        "SMTP_FROM_EMAIL": settings.smtp_from_email,
+    }
+    missing = [name for name, value in required_fields.items() if not value]
+    return EmailDeliveryStatusResponse(
+        provider="smtp",
+        configured=len(missing) == 0,
+        from_email=settings.smtp_from_email,
+        from_name=settings.smtp_from_name,
+        missing=missing,
+    )
+
+
+@router.get(
+    "/organizations/{organization_id}/customer-development-connectors",
+    response_model=CustomerDevelopmentConnectorsResponse,
+)
+def get_customer_development_connectors(
+    organization_id: str,
+    request: Request,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> CustomerDevelopmentConnectorsResponse:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+    except TenantAccessDenied as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+
+    settings = request.app.state.settings
+
+    def item(
+        *,
+        connector_id: str,
+        label: str,
+        provider: str,
+        purpose: str,
+        required: dict[str, object | None],
+    ) -> ConnectorStatusResponse:
+        missing = [name for name, value in required.items() if not value]
+        return ConnectorStatusResponse(
+            connector_id=connector_id,
+            label=label,
+            provider=provider,
+            purpose=purpose,
+            configured=len(missing) == 0,
+            missing=missing,
+        )
+
+    return CustomerDevelopmentConnectorsResponse(
+        connectors=[
+            item(
+                connector_id="public_search",
+                label="公开客户搜索",
+                provider="Bocha",
+                purpose="按产品和市场搜索潜在客户官网",
+                required={"BOCHA_API_KEY": settings.bocha_api_key},
+            ),
+            item(
+                connector_id="map_search_tomtom",
+                label="地图客户搜索",
+                provider="TomTom",
+                purpose="按行业和市场搜索海外企业地点、电话和官网",
+                required={"TOMTOM_API_KEY": settings.tomtom_api_key},
+            ),
+            item(
+                connector_id="map_search_geoapify",
+                label="地图客户搜索",
+                provider="Geoapify",
+                purpose="按目标市场搜索企业、工厂和贸易商，并读取公开联系方式",
+                required={"GEOAPIFY_API_KEY": settings.geoapify_api_key},
+            ),
+            item(
+                connector_id="map_search_foursquare",
+                label="地图客户搜索",
+                provider="Foursquare",
+                purpose="按行业和市场搜索企业地点、电话、官网与社交媒体",
+                required={"FOURSQUARE_API_KEY": settings.foursquare_api_key},
+            ),
+            item(
+                connector_id="customer_database",
+                label="客户数据库",
+                provider="Apollo",
+                purpose="搜索公司、联系人和职位信息",
+                required={"APOLLO_API_KEY": settings.apollo_api_key},
+            ),
+            item(
+                connector_id="email_finder",
+                label="邮箱查找",
+                provider="Hunter",
+                purpose="按公司域名查找可联系邮箱",
+                required={"HUNTER_API_KEY": settings.hunter_api_key},
+            ),
+            item(
+                connector_id="email_verifier_zerobounce",
+                label="邮箱验证",
+                provider="ZeroBounce",
+                purpose="发信前验证邮箱有效性",
+                required={"ZEROBOUNCE_API_KEY": settings.zerobounce_api_key},
+            ),
+            item(
+                connector_id="email_verifier_neverbounce",
+                label="备用邮箱验证",
+                provider="NeverBounce",
+                purpose="发信前验证邮箱有效性",
+                required={"NEVERBOUNCE_API_KEY": settings.neverbounce_api_key},
+            ),
+            item(
+                connector_id="outbound_email",
+                label="开发信发送",
+                provider="SMTP",
+                purpose="人工确认后发送开发信",
+                required={
+                    "SMTP_HOST": settings.smtp_host,
+                    "SMTP_USERNAME": settings.smtp_username,
+                    "SMTP_PASSWORD": settings.smtp_password,
+                    "SMTP_FROM_EMAIL": settings.smtp_from_email,
+                },
+            ),
+        ]
+    )
+
+
+@router.get(
+    "/organizations/{organization_id}/search-sources",
+    response_model=SearchSourcesResponse,
+)
+def list_search_sources(
+    organization_id: str,
+    request: Request,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> SearchSourcesResponse:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+    except TenantAccessDenied as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+
+    preferences = {
+        preference.source_id: preference
+        for preference in session.scalars(
+            select(SearchSourcePreference).where(SearchSourcePreference.organization_id == organization_id)
+        )
+    }
+    return SearchSourcesResponse(
+        sources=[
+            search_source_response(source, preferences.get(str(source["source_id"])))
+            for source in search_source_catalog(request.app.state.settings)
+        ]
+    )
+
+
+@router.patch(
+    "/organizations/{organization_id}/search-sources/{source_id}",
+    response_model=SearchSourceResponse,
+)
+def update_search_source(
+    organization_id: str,
+    source_id: str,
+    payload: UpdateSearchSourceRequest,
+    request: Request,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> SearchSourceResponse:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+    except TenantAccessDenied as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+
+    source = next(
+        (item for item in search_source_catalog(request.app.state.settings) if item["source_id"] == source_id),
+        None,
+    )
+    if source is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="search source not found")
+    preference = session.scalar(
+        select(SearchSourcePreference).where(
+            SearchSourcePreference.organization_id == organization_id,
+            SearchSourcePreference.source_id == source_id,
+        )
+    )
+    if preference is None:
+        preference = SearchSourcePreference(
+            organization_id=organization_id,
+            source_id=source_id,
+            enabled=payload.enabled,
+        )
+        session.add(preference)
+    else:
+        preference.enabled = payload.enabled
+    session.commit()
+    return search_source_response(source, preference)
+
+
 @router.post("/auth/register", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
 def register(payload: RegisterRequest, request: Request, session: Session = Depends(get_session)) -> SessionResponse:
     try:
@@ -241,6 +656,7 @@ def product_line_response(product_line, suppliers: list[str], product_items: lis
         product_keywords=product_line.product_keywords,
         buyer_profiles=product_line.buyer_profiles,
         target_regions=product_line.target_regions,
+        excluded_keywords=product_line.excluded_keywords,
         is_active=product_line.is_active,
         suppliers=suppliers,
         product_items=[product_item_response(item) for item in product_items or []],
@@ -280,6 +696,7 @@ def create_product_line(
             product_keywords=payload.product_keywords,
             buyer_profiles=payload.buyer_profiles,
             target_regions=payload.target_regions,
+            excluded_keywords=payload.excluded_keywords,
         )
         session.commit()
     except TenantAccessDenied as error:
@@ -309,6 +726,34 @@ def list_product_lines(
         )
         for product_line in service.list_product_lines(organization_id)
     ]
+
+
+@router.delete(
+    "/organizations/{organization_id}/product-lines/{product_line_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_product_line(
+    organization_id: str,
+    product_line_id: str,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> None:
+    try:
+        ProductLineService(session).delete_product_line(
+            actor_user_id=principal.user_id,
+            organization_id=organization_id,
+            product_line_id=product_line_id,
+        )
+        session.commit()
+    except TenantAccessDenied as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except ProductLineNotFound as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except ProductLineInUse as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
 
 @router.get(

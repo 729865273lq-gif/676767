@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.platform.models import ProductItem, ProductLine, ProductSupplier
@@ -9,6 +9,10 @@ from app.platform.service import AuditService, OrganizationService
 
 class ProductLineNotFound(LookupError):
     """Raised when a product line is unavailable in the selected organization."""
+
+
+class ProductLineInUse(ValueError):
+    """Raised when deleting a product line would remove customer records."""
 
 
 class ProductItemNotFound(LookupError):
@@ -29,6 +33,7 @@ class ProductLineService:
         product_keywords: list[str],
         buyer_profiles: list[str],
         target_regions: list[str],
+        excluded_keywords: list[str],
     ) -> ProductLine:
         OrganizationService(self.session).require_admin(actor_user_id, organization_id)
         product_line = ProductLine(
@@ -38,6 +43,7 @@ class ProductLineService:
             product_keywords=_normalize_list(product_keywords),
             buyer_profiles=_normalize_list(buyer_profiles),
             target_regions=_normalize_list(target_regions),
+            excluded_keywords=_normalize_list(excluded_keywords),
         )
         self.session.add(product_line)
         self.session.flush()
@@ -68,6 +74,48 @@ class ProductLineService:
         if product_line is None:
             raise ProductLineNotFound("product line not found")
         return product_line
+
+    def delete_product_line(
+        self,
+        *,
+        actor_user_id: str,
+        organization_id: str,
+        product_line_id: str,
+    ) -> None:
+        from app.crm.models import Lead
+
+        OrganizationService(self.session).require_admin(actor_user_id, organization_id)
+        product_line = self.get_product_line(product_line_id, organization_id)
+        lead_count = self.session.scalar(
+            select(func.count())
+            .select_from(Lead)
+            .where(
+                Lead.organization_id == organization_id,
+                Lead.product_line_id == product_line.id,
+            )
+        )
+        if lead_count:
+            raise ProductLineInUse(f"product line is used by {lead_count} customer lead(s)")
+
+        self.session.execute(
+            delete(ProductItem).where(
+                ProductItem.organization_id == organization_id,
+                ProductItem.product_line_id == product_line.id,
+            )
+        )
+        self.session.execute(
+            delete(ProductSupplier).where(
+                ProductSupplier.organization_id == organization_id,
+                ProductSupplier.product_line_id == product_line.id,
+            )
+        )
+        self.session.execute(delete(ProductLine).where(ProductLine.id == product_line.id))
+        AuditService(self.session).record(
+            actor_user_id=actor_user_id,
+            organization_id=organization_id,
+            event_type="product_line.deleted",
+            metadata={"product_line_id": product_line.id, "name": product_line.name},
+        )
 
     def add_supplier(
         self,

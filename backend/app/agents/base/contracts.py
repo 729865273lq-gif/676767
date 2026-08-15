@@ -16,6 +16,12 @@ class SearchResult(BaseModel):
     url: str
     title: str
     snippet: str = ""
+    canonical_key: str = ""
+    email: str = ""
+    phone: str = ""
+    whatsapp: str = ""
+    social_profiles: list[dict[str, str]] = Field(default_factory=list)
+    source_url: str = ""
 
 
 class OutboundMessage(BaseModel):
