@@ -13,6 +13,14 @@ class EmbeddingProviderError(RuntimeError):
     """Raised when the embedding provider rejects a request or returns an invalid response."""
 
 
+class ChatConfigurationError(ValueError):
+    """Raised when the OpenAI-compatible chat provider is not configured."""
+
+
+class ChatProviderError(RuntimeError):
+    """Raised when the chat provider rejects a request or returns an invalid response."""
+
+
 class OpenAICompatibleEmbeddingConnector:
     connector_id = "openai-compatible-embedding"
     version = "v1"
@@ -69,3 +77,68 @@ class OpenAICompatibleEmbeddingConnector:
         if len(vectors) != len(texts):
             raise EmbeddingProviderError("embedding provider returned an unexpected number of vectors")
         return vectors
+
+
+class OpenAICompatibleChatConnector:
+    connector_id = "openai-compatible-chat"
+    version = "v1"
+
+    def __init__(self, *, base_url: str, api_key: str, model: str) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._model = model
+
+    @classmethod
+    def from_settings(cls, settings: Settings) -> "OpenAICompatibleChatConnector":
+        missing = [
+            name
+            for name, value in {
+                "LLM_API_BASE": settings.llm_api_base,
+                "LLM_API_KEY": settings.llm_api_key,
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise ChatConfigurationError(
+                "chat provider is not configured: " + ", ".join(missing)
+            )
+        return cls(
+            base_url=settings.llm_api_base or "",
+            api_key=settings.llm_api_key or "",
+            model=settings.llm_model,
+        )
+
+    def classify_intent(self, subject: str, body: str) -> str | None:
+        """Ask the model to pick a reply intent; returns ``None`` on failure."""
+        prompt = (
+            "Classify this customer reply into exactly one of: interested, question, "
+            "not_now, not_interested, out_of_office, other. Reply with only the word.\n"
+            f"Subject: {subject}\nBody: {body}"
+        )
+        payload = {
+            "model": self._model,
+            "messages": [
+                {"role": "system", "content": "You classify sales reply intent."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0,
+        }
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                response = client.post(
+                    f"{self._base_url}/chat/completions", json=payload, headers=headers
+                )
+        except httpx.HTTPError as error:
+            raise ChatProviderError("chat provider could not be reached") from error
+        if response.status_code != 200:
+            raise ChatProviderError(f"chat provider returned HTTP {response.status_code}")
+        data = response.json()
+        try:
+            content = data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as error:
+            raise ChatProviderError("chat provider returned an invalid response") from error
+        return str(content).strip().lower() or None

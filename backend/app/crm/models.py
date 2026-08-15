@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from uuid import uuid4
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.platform.models import utcnow
@@ -307,3 +307,43 @@ class WebsiteInquiry(Base):
     product_item_name: Mapped[str] = mapped_column(String(200), default="", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)
     converted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class MailboxCursor(Base):
+    __tablename__ = "mailbox_cursors"
+
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), primary_key=True
+    )
+    mailbox: Mapped[str] = mapped_column(String(120), primary_key=True)
+    last_uid: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
+    )
+
+
+class InboundMessage(Base):
+    __tablename__ = "inbound_messages"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "provider_message_id", name="uq_inbound_message_provider"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    organization_id: Mapped[str] = mapped_column(
+        ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider_message_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    thread_id: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    sender_email: Mapped[str] = mapped_column(String(320), default="", nullable=False)
+    sender_name: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    subject: Mapped[str] = mapped_column(String(500), default="", nullable=False)
+    body_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    intent: Mapped[str] = mapped_column(String(30), default="other", nullable=False, index=True)
+    intent_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    analysis_rationale: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    suggested_reply: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    follow_up_task_id: Mapped[str | None] = mapped_column(
+        ForeignKey("follow_up_tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, nullable=False)

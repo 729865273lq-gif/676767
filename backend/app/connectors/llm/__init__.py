@@ -6,8 +6,11 @@ from app.agents.base.contracts import LlmCompletion
 from app.connectors.base import Connector
 from app.connectors.llm.embedding import EmbeddingConnector
 from app.connectors.llm.openai_compatible import (
+    ChatConfigurationError,
+    ChatProviderError,
     EmbeddingConfigurationError,
     EmbeddingProviderError,
+    OpenAICompatibleChatConnector,
     OpenAICompatibleEmbeddingConnector,
 )
 
@@ -17,9 +20,12 @@ class LlmConnector(Connector, Protocol):
 
 
 __all__ = [
+    "ChatConfigurationError",
+    "ChatProviderError",
     "EmbeddingConfigurationError",
     "EmbeddingConnector",
     "EmbeddingProviderError",
     "LlmConnector",
+    "OpenAICompatibleChatConnector",
     "OpenAICompatibleEmbeddingConnector",
 ]

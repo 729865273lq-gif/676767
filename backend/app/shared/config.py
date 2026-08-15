@@ -51,6 +51,12 @@ class Settings:
     imap_host: str | None = None
     imap_port: int = 993
     imap_sent_mailbox: str = ""
+    imap_username: str | None = None
+    imap_password: str | None = None
+    inbox_poll_seconds: int = 120
+    llm_api_base: str | None = None
+    llm_api_key: str | None = None
+    llm_model: str = "gpt-4o-mini"
 
     @classmethod
     def from_environment(cls, values: Mapping[str, str] | None = None) -> "Settings":
@@ -104,6 +110,12 @@ class Settings:
             imap_host=_optional_secret(environment, "IMAP_HOST"),
             imap_port=_optional_int(environment, "IMAP_PORT", 993),
             imap_sent_mailbox=environment.get("IMAP_SENT_MAILBOX", "").strip(),
+            imap_username=_optional_secret(environment, "IMAP_USERNAME"),
+            imap_password=_optional_secret(environment, "IMAP_PASSWORD"),
+            inbox_poll_seconds=_optional_int(environment, "INBOX_POLL_SECONDS", 120),
+            llm_api_base=_optional_secret(environment, "LLM_API_BASE"),
+            llm_api_key=_optional_secret(environment, "LLM_API_KEY"),
+            llm_model=environment.get("LLM_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini",
         )
 
 
