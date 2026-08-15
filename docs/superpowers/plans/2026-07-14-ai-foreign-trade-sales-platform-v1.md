@@ -54,7 +54,7 @@ docker-compose.yml                           Local PostgreSQL, Redis, MinIO, bac
 - Create: `backend/pyproject.toml`, `backend/app/main.py`, `backend/app/shared/config.py`, `backend/tests/test_health.py`
 - Create: `frontend/package.json`, `frontend/app/layout.tsx`, `frontend/app/page.tsx`, `frontend/e2e/health.spec.ts`
 
-- [ ] **Step 1: Write backend health test before adding an API route**
+- [x] **Step 1: Write backend health test before adding an API route**
 
 ```python
 # backend/tests/test_health.py
@@ -69,13 +69,13 @@ def test_health_reports_service_name() -> None:
     assert response.json() == {"service": "foreign-trade-api", "status": "ok"}
 ```
 
-- [ ] **Step 2: Verify the test fails because the application factory is missing**
+- [x] **Step 2: Verify the test fails because the application factory is missing**
 
 Run: `cd backend && uv run pytest tests/test_health.py -q`
 
 Expected: FAIL with an import error for `app.main`.
 
-- [ ] **Step 3: Implement the smallest app factory and health route**
+- [x] **Step 3: Implement the smallest app factory and health route**
 
 ```python
 # backend/app/main.py
@@ -95,13 +95,13 @@ def create_app() -> FastAPI:
 app = create_app()
 ```
 
-- [ ] **Step 4: Verify backend health passes**
+- [x] **Step 4: Verify backend health passes**
 
 Run: `cd backend && uv run pytest tests/test_health.py -q`
 
 Expected: `1 passed`.
 
-- [ ] **Step 5: Add a browser-visible frontend health assertion**
+- [x] **Step 5: Add a browser-visible frontend health assertion**
 
 ```ts
 // frontend/e2e/health.spec.ts
@@ -113,7 +113,7 @@ test("renders the sales workbench shell", async ({ page }) => {
 });
 ```
 
-- [ ] **Step 6: Implement the minimal frontend route and verify it**
+- [x] **Step 6: Implement the minimal frontend route and verify it**
 
 ```tsx
 // frontend/app/page.tsx
@@ -126,11 +126,11 @@ Run: `cd frontend && npm run test:e2e -- health.spec.ts`
 
 Expected: PASS.
 
-- [ ] **Step 7: Add deterministic local services and developer commands**
+- [x] **Step 7: Add deterministic local services and developer commands**
 
 Create PostgreSQL 16 with `pgvector`, Redis 7, and MinIO in `docker-compose.yml`; set `DATABASE_URL`, `REDIS_URL`, `S3_ENDPOINT`, `CREDENTIAL_ENCRYPTION_KEY`, and `APP_SECRET` in `.env.example`. Add `make up`, `make test-backend`, `make test-frontend`, and `make lint` commands. Do not place real credentials in repository files.
 
-- [ ] **Step 8: Run the clean baseline and commit**
+- [x] **Step 8: Run the clean baseline and commit**
 
 Run: `make test-backend && make test-frontend && make lint`
 
@@ -145,7 +145,7 @@ Commit: `git add . && git commit -m "chore: scaffold sales platform runtime"`
 - Create: `backend/tests/platform/test_tenant_access.py`, `backend/tests/platform/test_credentials.py`
 - Modify: `backend/app/main.py`, `database/alembic/versions/0001_platform.py`
 
-- [ ] **Step 1: Write failing organization-access tests**
+- [x] **Step 1: Write failing organization-access tests**
 
 ```python
 # backend/tests/platform/test_tenant_access.py
@@ -167,13 +167,13 @@ def test_admin_can_manage_members_but_member_cannot(session, organizations, memb
         service.require_admin(members["acme_member"].user_id, organizations["acme"].id)
 ```
 
-- [ ] **Step 2: Verify isolation tests fail**
+- [x] **Step 2: Verify isolation tests fail**
 
 Run: `cd backend && uv run pytest tests/platform/test_tenant_access.py -q`
 
 Expected: FAIL because platform service and models do not exist.
 
-- [ ] **Step 3: Implement the organization boundary**
+- [x] **Step 3: Implement the organization boundary**
 
 ```python
 # backend/app/platform/service.py
@@ -204,13 +204,13 @@ class OrganizationService:
 
 Add `Organization`, `User`, `UserMembership`, `ConnectorCredential`, and `AuditEvent` tables. Every subsequent tenant table must include a non-null foreign-key `organization_id` and repository methods must require it as a parameter.
 
-- [ ] **Step 4: Verify role and tenant tests pass**
+- [x] **Step 4: Verify role and tenant tests pass**
 
 Run: `cd backend && uv run pytest tests/platform/test_tenant_access.py -q`
 
 Expected: `2 passed`.
 
-- [ ] **Step 5: Write failing encrypted-credential and raw-secret tests**
+- [x] **Step 5: Write failing encrypted-credential and raw-secret tests**
 
 ```python
 # backend/tests/platform/test_credentials.py
@@ -224,11 +224,11 @@ def test_cipher_round_trips_secret_without_storing_plaintext():
     assert cipher.decrypt(encrypted) == "sk-test-secret"
 ```
 
-- [ ] **Step 6: Implement credential encryption and audit writing**
+- [x] **Step 6: Implement credential encryption and audit writing**
 
 Use `cryptography.fernet.Fernet` with a base64-encoded 32-byte key from configuration. Store only `ciphertext`, connector type, key label, last-four display value, and timestamps. The create/update methods call `AuditService.record` with actor, organization, event type, and safe metadata; audit metadata must never contain plaintext secrets.
 
-- [ ] **Step 7: Run platform tests, migration, and commit**
+- [x] **Step 7: Run platform tests, migration, and commit**
 
 Run: `cd backend && uv run pytest tests/platform -q && uv run alembic upgrade head`
 
@@ -245,7 +245,7 @@ Commit: `git add backend database && git commit -m "feat: add tenant platform fo
 - Create: `backend/tests/workflow/test_state_machine.py`, `backend/tests/agents/test_registry.py`
 - Modify: `database/alembic/versions/0002_workflow.py`
 
-- [ ] **Step 1: Write the invalid-transition test first**
+- [x] **Step 1: Write the invalid-transition test first**
 
 ```python
 # backend/tests/workflow/test_state_machine.py
@@ -261,13 +261,13 @@ def test_completed_workflow_cannot_return_to_running(workflow_run):
         service.transition(workflow_run.id, "running")
 ```
 
-- [ ] **Step 2: Verify the state-machine test fails**
+- [x] **Step 2: Verify the state-machine test fails**
 
 Run: `cd backend && uv run pytest tests/workflow/test_state_machine.py -q`
 
 Expected: FAIL because `WorkflowService` is missing.
 
-- [ ] **Step 3: Implement durable run and step transitions**
+- [x] **Step 3: Implement durable run and step transitions**
 
 Create `WorkflowRun` and `WorkflowStep` with organization ID, agent ID/version, JSON input/output, error code/detail, idempotency key, timestamps, and states `queued`, `running`, `waiting_for_human`, `completed`, `failed`. Implement a transition map that permits only:
 
@@ -281,13 +281,13 @@ ALLOWED = {
 }
 ```
 
-- [ ] **Step 4: Verify the state machine passes**
+- [x] **Step 4: Verify the state machine passes**
 
 Run: `cd backend && uv run pytest tests/workflow/test_state_machine.py -q`
 
 Expected: `1 passed`.
 
-- [ ] **Step 5: Write a failing plug-in registration test**
+- [x] **Step 5: Write a failing plug-in registration test**
 
 ```python
 # backend/tests/agents/test_registry.py
@@ -305,11 +305,11 @@ def test_registry_resolves_registered_agent_without_switch_statement():
     assert registry.resolve("example").version == "1.0.0"
 ```
 
-- [ ] **Step 6: Implement contracts and registry**
+- [x] **Step 6: Implement contracts and registry**
 
 Define `Agent` and `Connector` protocols. An agent exposes `agent_id`, `version`, `input_model`, `output_model`, and async `run(context, payload)`. `AgentRegistry.register` rejects duplicate IDs and `resolve` raises a typed `AgentNotFound`. Define normalized `SearchResult`, `OutboundMessage`, `InboundMessage`, `RetrievedChunk`, and `LlmCompletion` Pydantic models before provider implementations.
 
-- [ ] **Step 7: Verify registry tests and commit**
+- [x] **Step 7: Verify registry tests and commit**
 
 Run: `cd backend && uv run pytest tests/workflow tests/agents -q`
 
@@ -327,7 +327,7 @@ Commit: `git add backend database && git commit -m "feat: add workflow and exten
 - Create: `frontend/app/(app)/discovery/page.tsx`, `frontend/components/discovery/{discovery-form,lead-table,score-breakdown}.tsx`
 - Modify: `database/alembic/versions/0003_crm.py`
 
-- [ ] **Step 1: Write the priority recommendation test**
+- [x] **Step 1: Write the priority recommendation test**
 
 ```python
 # backend/tests/crm/test_priority_gate.py
@@ -349,23 +349,23 @@ def test_missing_decision_attempt_is_needs_enrichment_not_priority():
     assert result.bucket == "needs_enrichment"
 ```
 
-- [ ] **Step 2: Verify the quality-gate tests fail**
+- [x] **Step 2: Verify the quality-gate tests fail**
 
 Run: `cd backend && uv run pytest tests/crm/test_priority_gate.py -q`
 
 Expected: FAIL because `qualify_lead` is missing.
 
-- [ ] **Step 3: Implement transparent qualification and scoring**
+- [x] **Step 3: Implement transparent qualification and scoring**
 
 Implement `LeadQualification` with `bucket`, `score`, `reasons`, and `missing_signals`. Require website, fit evidence, contact channel, and decision-maker attempt for `priority_recommendation`; do not require successfully named decision-maker. Score four 0-25 dimensions: business fit, reachability, contact quality, evidence confidence. Persist source URL, excerpt, capture time, and signal name on `LeadEvidence`.
 
-- [ ] **Step 4: Verify qualification tests pass**
+- [x] **Step 4: Verify qualification tests pass**
 
 Run: `cd backend && uv run pytest tests/crm/test_priority_gate.py -q`
 
 Expected: `2 passed`.
 
-- [ ] **Step 5: Write canonical-domain dedupe and batch-save tests**
+- [x] **Step 5: Write canonical-domain dedupe and batch-save tests**
 
 ```python
 # backend/tests/crm/test_dedupe.py
@@ -382,11 +382,11 @@ def test_batch_save_returns_one_result_per_selected_lead(crm_service, organizati
     assert len(result.saved_company_ids) == len(qualified_leads)
 ```
 
-- [ ] **Step 6: Implement CRM conversion and Customer Agent**
+- [x] **Step 6: Implement CRM conversion and Customer Agent**
 
 Normalize domains with `urllib.parse.urlparse`, lowercase, remove `www.`, and use the normalized domain as the organization-scoped unique company key. Build `CustomerAgent.run` as workflow steps: query planning, search, company extraction, evidence collection, scoring, decision-maker attempt, and lead persistence. Each step records its agent version and source evidence; provider failures produce retryable workflow errors rather than partial data deletion.
 
-- [ ] **Step 7: Build the discovery workbench and verify API/UI behavior**
+- [x] **Step 7: Build the discovery workbench and verify API/UI behavior**
 
 Render product, country, and optional filters; poll workflow state; show distinct Priority Recommendations and Needs Enrichment tabs; make the score breakdown and evidence links visible; support selected-row bulk save and bulk draft actions. Add an API contract test that a member can only read organization-scoped leads.
 
@@ -394,7 +394,7 @@ Run: `cd backend && uv run pytest tests/crm -q && cd ../frontend && npm run test
 
 Expected: all tests pass.
 
-- [ ] **Step 8: Commit the discovery milestone**
+- [x] **Step 8: Commit the discovery milestone**
 
 Commit: `git add backend frontend database && git commit -m "feat: add evidence-backed customer discovery"`
 
