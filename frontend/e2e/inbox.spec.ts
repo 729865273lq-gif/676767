@@ -16,20 +16,24 @@ test("inbox list, filter, manual sync, and mark-done flow", async ({ page }) => 
   let done = false;
   const dueAt = new Date(Date.now() + 3 * 86400000).toISOString();
 
-  const interested = {
-    id: "msg-1",
-    provider_message_id: "pm-1",
-    sender_email: "anna@buyer.example",
-    sender_name: "Anna Buyer",
-    subject: "Re: LED Floodlight quotation",
-    received_at: "2026-08-03T08:00:00Z",
-    intent: "interested",
-    intent_confidence: 0.8,
-    suggested_reply: "Thank you for your interest in our products. Could you let me know your target quantity?",
-    follow_up_task_id: "task-1",
-    due_at: dueAt,
-    created_at: "2026-08-03T08:00:00Z",
-  };
+  function interestedMessage() {
+    return {
+      id: "msg-1",
+      provider_message_id: "pm-1",
+      sender_email: "anna@buyer.example",
+      sender_name: "Anna Buyer",
+      subject: "Re: LED Floodlight quotation",
+      received_at: "2026-08-03T08:00:00Z",
+      intent: "interested",
+      intent_confidence: 0.8,
+      suggested_reply: "Thank you for your interest in our products. Could you let me know your target quantity?",
+      follow_up_task_id: "task-1",
+      follow_up_status: done ? "done" : "open",
+      due_at: dueAt,
+      attachments_count: 2,
+      created_at: "2026-08-03T08:00:00Z",
+    };
+  }
   const outOfOffice = {
     id: "msg-2",
     provider_message_id: "pm-2",
@@ -41,17 +45,23 @@ test("inbox list, filter, manual sync, and mark-done flow", async ({ page }) => 
     intent_confidence: 0.95,
     suggested_reply: "",
     follow_up_task_id: null,
+    follow_up_status: null,
     due_at: null,
+    attachments_count: 0,
     created_at: "2026-08-03T09:00:00Z",
   };
-  const messages = [interested, outOfOffice];
-  const detail = {
-    ...interested,
-    thread_id: "thread-1",
-    body_text: "Hello, we are interested in your LED Floodlight 200W.\n\nPlease send a quotation for 300 units to Hamburg.",
-    analysis_rationale: "Body expresses buying interest and requests a quote.",
-    linked_company_name: "Website Buyer Ltd",
-  };
+  function listMessages() {
+    return [interestedMessage(), outOfOffice];
+  }
+  function detailMessage() {
+    return {
+      ...interestedMessage(),
+      thread_id: "thread-1",
+      body_text: "Hello, we are interested in your LED Floodlight 200W.\n\nPlease send a quotation for 300 units to Hamburg.",
+      analysis_rationale: "Body expresses buying interest and requests a quote.",
+      linked_company_name: "Website Buyer Ltd",
+    };
+  }
 
   // Workbench startup endpoints (mirror the existing e2e mocks so the page loads cleanly).
   await page.route(/\/platform\/organizations\/org-1\/product-lines$/, async (route) => {
@@ -99,15 +109,15 @@ test("inbox list, filter, manual sync, and mark-done flow", async ({ page }) => 
     const url = new URL(route.request().url());
     const intent = url.searchParams.get("intent");
     const hasFollowUp = url.searchParams.get("has_follow_up");
-    const items = messages.filter((message) => {
+    const items = listMessages().filter((message) => {
       if (intent && message.intent !== intent) return false;
-      if (hasFollowUp === "true" && !message.follow_up_task_id) return false;
+      if (hasFollowUp === "true" && message.follow_up_status !== "open") return false;
       return true;
     });
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(items) });
   });
   await page.route(/\/organizations\/org-1\/inbox\/msg-1$/, async (route) => {
-    await route.fulfill({ contentType: "application/json", body: JSON.stringify(detail) });
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify(detailMessage()) });
   });
   await page.route(/\/organizations\/org-1\/inbox\/sync$/, async (route) => {
     expect(route.request().method()).toBe("POST");
@@ -150,13 +160,14 @@ test("inbox list, filter, manual sync, and mark-done flow", async ({ page }) => 
   const drawer = page.getByLabel("收件箱详情");
   await expect(drawer.getByText("300 units to Hamburg")).toBeVisible();
   await expect(drawer.getByText("Website Buyer Ltd")).toBeVisible();
+  await expect(drawer.getByText("附件：2 个")).toBeVisible();
 
   // Mark the follow-up as done.
   await drawer.getByRole("button", { name: "标记完成" }).click();
   await expect(drawer.getByText("已完成")).toBeVisible();
   expect(done).toBe(true);
 
-  // Close the drawer: the list now reflects the done state (client-side tracking).
+  // Close the drawer: the refreshed list reflects the persisted done status.
   await drawer.getByRole("button", { name: "关闭邮件详情" }).click();
   await expect(list.getByText("已完成")).toBeVisible();
 

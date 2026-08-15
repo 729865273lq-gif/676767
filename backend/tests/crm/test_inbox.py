@@ -534,7 +534,10 @@ def test_router_authz_and_intent_filter() -> None:
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
     )
     assert listed.status_code == 200
-    assert len(listed.json()) == 2
+    listed_body = listed.json()
+    assert len(listed_body) == 2
+    assert all(item["follow_up_status"] is None for item in listed_body)
+    assert all(item["attachments_count"] == 0 for item in listed_body)
 
     filtered = client.get(
         f"/organizations/{client.acme_id}/inbox?intent=interested",  # type: ignore[attr-defined]
@@ -629,6 +632,7 @@ def test_router_filters_detail_and_follow_up_done() -> None:
             follow_up_task_id=task2.id,
             analysis_rationale="question rationale",
             suggested_reply="question reply",
+            attachments_count=2,
         )
         m3 = InboundMessage(
             organization_id=org_id,
@@ -652,6 +656,7 @@ def test_router_filters_detail_and_follow_up_done() -> None:
 
     with_task = client.get(f"{base}?has_follow_up=true", headers=headers).json()
     assert len(with_task) == 2
+    assert {item["follow_up_status"] for item in with_task} == {"open"}
 
     without_task = client.get(f"{base}?has_follow_up=false", headers=headers).json()
     assert len(without_task) == 1
@@ -670,6 +675,8 @@ def test_router_filters_detail_and_follow_up_done() -> None:
     assert detail_body["suggested_reply"] == "question reply"
     assert detail_body["linked_company_name"] == "Router Buyer"
     assert detail_body["due_at"] is not None
+    assert detail_body["follow_up_status"] == "open"
+    assert detail_body["attachments_count"] == 2
 
     done = client.post(f"{base}/{m2_id}/follow-up/done", headers=headers)
     assert done.status_code == 200
@@ -684,6 +691,22 @@ def test_router_filters_detail_and_follow_up_done() -> None:
         )
         assert done_record is not None
         assert done_record.actor_user_id == client.member_id  # type: ignore[attr-defined]
+
+    # has_follow_up=true now excludes the done task (only m1 remains open).
+    open_after = client.get(f"{base}?has_follow_up=true", headers=headers).json()
+    assert [item["provider_message_id"] for item in open_after] == ["m1"]
+
+    # has_follow_up=false now includes the done task and the task-less message.
+    without_open_after = client.get(f"{base}?has_follow_up=false", headers=headers).json()
+    assert {item["provider_message_id"] for item in without_open_after} == {"m2", "m3"}
+    m2_after = next(
+        item for item in without_open_after if item["provider_message_id"] == "m2"
+    )
+    assert m2_after["follow_up_status"] == "done"
+
+    # The done message reports status "done" in detail too.
+    detail_after = client.get(f"{base}/{m2_id}", headers=headers).json()
+    assert detail_after["follow_up_status"] == "done"
 
     conflict = client.post(f"{base}/{m3_id}/follow-up/done", headers=headers)
     assert conflict.status_code == 409

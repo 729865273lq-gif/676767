@@ -524,10 +524,12 @@ class InboxService:
         statement = select(InboundMessage).where(InboundMessage.organization_id == organization_id)
         if intent is not None:
             statement = statement.where(InboundMessage.intent == intent)
-        if has_follow_up is True:
-            statement = statement.where(InboundMessage.follow_up_task_id.is_not(None))
-        elif has_follow_up is False:
-            statement = statement.where(InboundMessage.follow_up_task_id.is_(None))
+        if has_follow_up is not None:
+            open_task = select(FollowUpTask.id).where(
+                FollowUpTask.id == InboundMessage.follow_up_task_id,
+                FollowUpTask.status == FollowUpTaskStatus.OPEN,
+            )
+            statement = statement.where(open_task.exists() if has_follow_up else ~open_task.exists())
         if due_from is not None or due_before is not None:
             statement = statement.join(FollowUpTask, FollowUpTask.id == InboundMessage.follow_up_task_id)
             if due_from is not None:
@@ -568,6 +570,14 @@ class InboxService:
             return None
         task = self.session.get(FollowUpTask, message.follow_up_task_id)
         return task.due_at if task is not None else None
+
+    def message_follow_up_status(self, message: InboundMessage) -> str | None:
+        if message.follow_up_task_id is None:
+            return None
+        task = self.session.get(FollowUpTask, message.follow_up_task_id)
+        if task is None:
+            return None
+        return task.status.value
 
     def mark_follow_up_done(
         self, message_id: str, organization_id: str, actor_user_id: str

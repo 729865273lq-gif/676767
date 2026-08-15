@@ -46,7 +46,7 @@ SMTP_USE_TLS=true
 
 ```bash
 # 若用 docker-compose 启动
-docker compose restart backend
+docker compose restart api
 
 # 若本地直接跑 uvicorn，先停掉再启动（示例）
 # Ctrl+C 停止后，重新执行启动命令
@@ -115,7 +115,7 @@ curl -X POST "http://localhost:8000/organizations/{organization_id}/inbox/sync" 
 
 ```bash
 # docker-compose 场景
-docker compose logs backend --tail=200 | grep -i imap
+docker compose logs api --tail=200 | grep -i imap
 
 # 本地日志文件（项目根目录）
 # 查看 backend-api.log 或 backend-api-live.log 中近期 imap 相关记录

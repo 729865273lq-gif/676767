@@ -457,7 +457,9 @@ export type InboxMessageListItem = {
   intent_confidence: number;
   suggested_reply: string;
   follow_up_task_id: string | null;
+  follow_up_status: "open" | "done" | null;
   due_at: string | null;
+  attachments_count: number;
   created_at: string;
 };
 

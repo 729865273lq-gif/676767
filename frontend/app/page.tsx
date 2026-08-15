@@ -1878,7 +1878,6 @@ function InboxPanel({
   isAdmin,
   syncing,
   syncFeedback,
-  completedIds,
   onIntentFilterChange,
   onFollowUpOnlyChange,
   onDueFromChange,
@@ -1897,7 +1896,6 @@ function InboxPanel({
   isAdmin: boolean;
   syncing: boolean;
   syncFeedback: string;
-  completedIds: string[];
   onIntentFilterChange: (intent: InboxIntent | "all") => void;
   onFollowUpOnlyChange: (followUpOnly: boolean) => void;
   onDueFromChange: (dueFrom: string) => void;
@@ -1906,9 +1904,7 @@ function InboxPanel({
   onSync: () => void;
   onOpenMessage: (messageId: string) => void;
 }) {
-  const pendingCount = messages.filter(
-    (message) => message.follow_up_task_id && !completedIds.includes(message.id)
-  ).length;
+  const pendingCount = messages.filter((message) => message.follow_up_status === "open").length;
   return (
     <section className="inquiryPanel" aria-labelledby="inbox-title">
       <div className="sectionHeader">
@@ -1987,8 +1983,8 @@ function InboxPanel({
       ) : (
         <div className="inquiryList" aria-label="收件箱列表">
           {messages.map((message) => {
-            const done = completedIds.includes(message.id);
-            const hasFollowUp = Boolean(message.follow_up_task_id);
+            const done = message.follow_up_status === "done";
+            const hasFollowUp = message.follow_up_status === "open";
             return (
               <article className="inquiryItem inboxMessageItem" key={message.id}>
                 <div className="inquiryMain">
@@ -2012,7 +2008,7 @@ function InboxPanel({
                 </div>
                 <div className="inquiryMeta">
                   <span>收到：{formatDateTime(message.received_at)}</span>
-                  {hasFollowUp && !done && message.due_at ? <span>{inboxDueLabel(message.due_at)}</span> : null}
+                  {hasFollowUp && message.due_at ? <span>{inboxDueLabel(message.due_at)}</span> : null}
                 </div>
                 <div className="inquiryActions">
                   <button className="textButton" type="button" onClick={() => onOpenMessage(message.id)}>
@@ -2032,7 +2028,6 @@ function InboxMessageDrawer({
   open,
   detail,
   loading,
-  completed,
   completing,
   onClose,
   onMarkDone,
@@ -2040,13 +2035,13 @@ function InboxMessageDrawer({
   open: boolean;
   detail: InboxMessageDetail | null;
   loading: boolean;
-  completed: boolean;
   completing: boolean;
   onClose: () => void;
   onMarkDone: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   if (!open) return null;
+  const completed = detail !== null && detail.follow_up_status === "done";
 
   async function copyReply() {
     if (!detail) return;
@@ -2079,7 +2074,7 @@ function InboxMessageDrawer({
                 </span>
                 {completed ? (
                   <span className="status statusIntentInterest">已完成</span>
-                ) : detail.follow_up_task_id ? (
+                ) : detail.follow_up_status === "open" ? (
                   <span className="status statusResearch">待跟进</span>
                 ) : (
                   <span className="status statusQualified">无需跟进</span>
@@ -2088,6 +2083,7 @@ function InboxMessageDrawer({
               <h3>{detail.subject || "（无主题）"}</h3>
               <p>发件人：{detail.sender_name || detail.sender_email} / {detail.sender_email}</p>
               <p>收到时间：{formatDateTime(detail.received_at)}</p>
+              {detail.attachments_count > 0 ? <p>附件：{detail.attachments_count} 个</p> : null}
               {detail.linked_company_name ? <p>关联客户：{detail.linked_company_name}</p> : null}
               {detail.follow_up_task_id && detail.due_at ? (
                 <p>跟进截止：{formatDateTime(detail.due_at)}（{inboxDueLabel(detail.due_at)}）</p>
@@ -2111,7 +2107,7 @@ function InboxMessageDrawer({
               <p className="inboxBodyText">{detail.suggested_reply || "暂无建议回复。"}</p>
             </div>
             <div className="drawerActions">
-              {detail.follow_up_task_id && !completed ? (
+              {detail.follow_up_status === "open" ? (
                 <button className="outlineButton" type="button" disabled={completing} onClick={onMarkDone}>
                   {completing ? "标记中..." : "标记完成"}
                 </button>
@@ -3039,7 +3035,6 @@ export default function HomePage() {
   const [inboxDrawerOpen, setInboxDrawerOpen] = useState(false);
   const [loadingInboxDetail, setLoadingInboxDetail] = useState(false);
   const [completingInboxMessageId, setCompletingInboxMessageId] = useState("");
-  const [completedInboxIds, setCompletedInboxIds] = useState<string[]>([]);
   const [error, setError] = useState("");
 
   const selectedProductLine = useMemo(
@@ -3336,8 +3331,8 @@ export default function HomePage() {
     setCompletingInboxMessageId(messageId);
     try {
       await markInboxFollowUpDone(session, messageId);
-      setCompletedInboxIds((current) =>
-        current.includes(messageId) ? current : [...current, messageId]
+      setInboxDetail((current) =>
+        current && current.id === messageId ? { ...current, follow_up_status: "done" } : current
       );
       await refreshInbox();
     } catch (caught) {
@@ -4486,7 +4481,6 @@ export default function HomePage() {
             isAdmin={session.organization_role === "admin"}
             syncing={syncingInbox}
             syncFeedback={inboxSyncFeedback}
-            completedIds={completedInboxIds}
             onIntentFilterChange={changeInboxIntentFilter}
             onFollowUpOnlyChange={changeInboxFollowUpOnly}
             onDueFromChange={changeInboxDueFrom}
@@ -4568,7 +4562,6 @@ export default function HomePage() {
         open={inboxDrawerOpen}
         detail={inboxDetail}
         loading={loadingInboxDetail}
-        completed={inboxDetail ? completedInboxIds.includes(inboxDetail.id) : false}
         completing={inboxDetail ? completingInboxMessageId === inboxDetail.id : false}
         onClose={closeInboxMessage}
         onMarkDone={() => {

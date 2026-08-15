@@ -33,7 +33,9 @@ class InboxMessageListItem(BaseModel):
     intent_confidence: float
     suggested_reply: str
     follow_up_task_id: str | None
+    follow_up_status: str | None
     due_at: datetime | None
+    attachments_count: int
     created_at: datetime
 
 
@@ -51,8 +53,10 @@ class InboxMessageDetail(BaseModel):
     analysis_rationale: str
     suggested_reply: str
     follow_up_task_id: str | None
+    follow_up_status: str | None
     due_at: datetime | None
     linked_company_name: str | None
+    attachments_count: int
     created_at: datetime
 
 
@@ -104,7 +108,9 @@ def _list_item(message: InboundMessage, service: InboxService) -> InboxMessageLi
         intent_confidence=message.intent_confidence,
         suggested_reply=message.suggested_reply,
         follow_up_task_id=message.follow_up_task_id,
+        follow_up_status=service.message_follow_up_status(message),
         due_at=service.message_due_at(message),
+        attachments_count=message.attachments_count,
         created_at=message.created_at,
     )
 
@@ -124,8 +130,10 @@ def _detail(message: InboundMessage, service: InboxService) -> InboxMessageDetai
         analysis_rationale=message.analysis_rationale,
         suggested_reply=message.suggested_reply,
         follow_up_task_id=message.follow_up_task_id,
+        follow_up_status=service.message_follow_up_status(message),
         due_at=service.message_due_at(message),
         linked_company_name=service.linked_company_name(message),
+        attachments_count=message.attachments_count,
         created_at=message.created_at,
     )
 
