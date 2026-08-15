@@ -532,7 +532,7 @@ Commit: `git add backend frontend database && git commit -m "feat: add quality-g
 - Create: `frontend/app/(app)/{dashboard,inbox}/page.tsx`, `frontend/components/{dashboard,inbox}/`
 - Create: `frontend/e2e/sales-loop.spec.ts`, `docs/operations/pilot-runbook.md`
 
-- [ ] **Step 1: Write the failing end-to-end domain test**
+- [x] **Step 1: Write the failing end-to-end domain test**
 
 ```python
 # backend/tests/integration/test_sales_loop.py
@@ -544,23 +544,23 @@ def test_reply_sync_creates_analysis_follow_up_and_timeline(sales_loop, inbound_
     assert sales_loop.timeline_contains("reply_analyzed")
 ```
 
-- [ ] **Step 2: Verify the integration test fails**
+- [x] **Step 2: Verify the integration test fails**
 
 Run: `cd backend && uv run pytest tests/integration/test_sales_loop.py -q`
 
 Expected: FAIL because reply synchronization is missing.
 
-- [ ] **Step 3: Implement normalized mailbox synchronization and reply analysis**
+- [x] **Step 3: Implement normalized mailbox synchronization and reply analysis**
 
 Use Gmail history IDs and Microsoft Graph delta links; store provider cursor per organization mailbox. Normalize each inbound message by provider message ID, thread ID, sender, recipients, headers, body, received time, and attachments. Upsert idempotently, associate to CRM company/contact by canonical email/domain, run Email Agent reply classification, store confidence/rationale/suggested reply, create a due follow-up for non-terminal intent, and append timeline events.
 
-- [ ] **Step 4: Verify reply loop passes**
+- [x] **Step 4: Verify reply loop passes**
 
 Run: `cd backend && uv run pytest tests/integration/test_sales_loop.py -q`
 
 Expected: `1 passed`.
 
-- [ ] **Step 5: Write metric tests for the accepted pilot funnel**
+- [x] **Step 5: Write metric tests for the accepted pilot funnel**
 
 ```python
 # backend/tests/dashboard/test_metrics.py
@@ -571,11 +571,11 @@ def test_metrics_count_only_current_organization(dashboard_service, organization
     assert metrics.replies == 2
 ```
 
-- [ ] **Step 6: Implement dashboard and inbox**
+- [x] **Step 6: Implement dashboard and inbox**
 
 Expose discovered, qualified, priority, saved, review-ready, approved, sent, replied, and opportunity metrics; show reply rate and conversion per product line. Build inbox filters by intent and due date, suggested reply editor, task completion, and company timeline links. UI must render stable empty, loading, connector-error, and permission-denied states.
 
-- [ ] **Step 7: Verify pilot acceptance in browser and API suites**
+- [x] **Step 7: Verify pilot acceptance in browser and API suites**
 
 Implement `sales-loop.spec.ts` to create a qualifying lead, bulk save it, generate a draft, fail then pass quality gate, approve/send once through a fake connector, sync a reply, and observe resulting inbox task/timeline. Run responsive assertions at 1440x900 and 390x844.
 
@@ -583,7 +583,7 @@ Run: `cd backend && uv run pytest -q && cd ../frontend && npm run lint && npm ru
 
 Expected: all backend tests, lint, and browser tests pass.
 
-- [ ] **Step 8: Run security and operational release checks, then commit**
+- [x] **Step 8: Run security and operational release checks, then commit**
 
 Verify tenant isolation for all routers, secret redaction in logs/audit output, connector retry/idempotency behavior, and a cold-start local Docker Compose run. Write the pilot runbook with connector OAuth setup, organization onboarding, failure recovery, backup policy, and support escalation. Capture desktop/mobile screenshots for dashboard, discovery, CRM detail, email review, and inbox.
 
