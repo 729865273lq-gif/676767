@@ -43,6 +43,7 @@ jobs:
           APP_SECRET: ci-test-secret-value
           CREDENTIAL_ENCRYPTION_KEY: ${{ env.FERNET_KEY }}
           DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/foreign_trade
+          TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/foreign_trade
         run: pytest -q
 
   frontend:

@@ -63,4 +63,5 @@ description: AI 外贸销售平台(AI Foreign Trade Sales Platform)项目专属�
 - **`npm run build` 会清 `.next` 顶掉正在跑的 dev server**:先停 dev 再 build,或 build 完成后重启 `npm run dev`
 - **alembic 迁移测试要求从 `backend` 目录启动**;从项目根目录跑会找不到 `../database/alembic`
 - **SQLite 测试覆盖不到 pgvector**:向量检索改动后,除单测外必须做一次真实 Postgres 检索冒烟
+- **OneDrive 会破坏 `.next` 软链接**:`npm run build` 后再跑 dev 可能报 `EINVAL readlink .next\server\vendor-chunks\@swc.js`——删掉 `frontend\.next` 后重启 `npm run dev` 即可
 - PowerShell 传中文给 Python 脚本会变乱码:临时验证脚本里用 Unicode 转义,浏览器/UTF-8 通道不受影响
