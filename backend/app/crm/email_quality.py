@@ -89,25 +89,23 @@ _GENERIC_SALUTATION_RE = re.compile(
     re.IGNORECASE,
 )
 
-# signal_name semantics: markers that identify an evidence item's kind when the
-# signal name is informative. Uninformative source descriptors (search_result,
-# manual_entry, public_website) fall back to the source_excerpt text.
-_PRODUCT_SIGNAL_MARKERS = (
-    "product", "supplier", "factory", "manufacturer", "catalog", "sku", "material",
+# Evidence text is classified by its content. Lead evidence describes the customer,
+# so customer markers win when text carries both (e.g. "lighting importer").
+# Word boundaries keep abbreviations ("inc", "corp") from matching inside longer
+# words ("including", "incorporated", "incentive").
+_CUSTOMER_TEXT_RE = re.compile(
+    r"\b(company|companies|customer|customers|client|clients|buyer|buyers"
+    r"|distributor|distributors|importer|importers|wholesaler|wholesalers"
+    r"|retailer|retailers|merchant|merchants|trader|traders|founded|established"
+    r"|ltd|gmbh|inc|corp|group|co)\b|公司|成立",
+    re.IGNORECASE,
 )
-_CUSTOMER_SIGNAL_MARKERS = ("customer", "company", "lead", "contact", "buyer", "account")
 
-# Text markers used when a signal_name is uninformative or evidence is a bare string.
-# Customer markers are checked first: lead evidence describes the customer, so
-# "lighting importer" is customer context, not product context.
-_CUSTOMER_TEXT_MARKERS = (
-    "company", "customer", "client", "buyer", "distributor", "importer", "wholesaler",
-    "retailer", "merchant", "trader", "founded", "established", "成立", "公司", "ltd",
-    "gmbh", "inc", "corp", "group", "co.",
-)
-_PRODUCT_TEXT_MARKERS = (
-    "supplier", "factory", "manufacturer", "manufacturing", "oem", "odm",
-    "datasheet", "specification", "catalog", "sku", "component",
+_PRODUCT_TEXT_RE = re.compile(
+    r"\b(supplier|suppliers|factory|factories|manufacturer|manufacturers|manufacturing"
+    r"|oem|odm|datasheet|datasheets|specification|specifications|catalog|catalogs"
+    r"|sku|skus|component|components)\b",
+    re.IGNORECASE,
 )
 
 _TOKEN_STOPWORDS = {
@@ -306,33 +304,19 @@ def _classify_mapping_evidence(item: Mapping[str, str]) -> tuple[str, str]:
     if not display:
         return ("neutral", "")
 
-    kind = _signal_name_kind(signal_name)
-    if kind != "neutral":
-        return (kind, display)
-
-    # Uninformative signal name: fall back to the excerpt text. Lead evidence
-    # defaults to customer context when the text carries no explicit signal.
+    # The production evidence_snapshot only carries source descriptors
+    # (search_result, manual_entry), so classification relies on the excerpt text.
+    # Lead evidence defaults to customer context when the text carries no signal.
     kind = _text_kind(display)
     if kind == "neutral":
         return ("customer", display)
     return (kind, display)
 
 
-def _signal_name_kind(signal_name: str) -> str:
-    lowered = signal_name.lower()
-    if any(marker in lowered for marker in _PRODUCT_SIGNAL_MARKERS):
-        return "product"
-    if any(marker in lowered for marker in _CUSTOMER_SIGNAL_MARKERS):
-        return "customer"
-    return "neutral"
-
-
 def _text_kind(text: str) -> str:
-    lowered = text.lower()
-    if any(marker in lowered for marker in _CUSTOMER_TEXT_MARKERS):
+    if _CUSTOMER_TEXT_RE.search(text):
         return "customer"
-    product_signal = _GENERIC_PRODUCT_SIGNAL_RE.search(lowered) is not None
-    if any(marker in lowered for marker in _PRODUCT_TEXT_MARKERS) or product_signal:
+    if _PRODUCT_TEXT_RE.search(text):
         return "product"
     return "neutral"
 

@@ -159,10 +159,10 @@ def test_real_evidence_snapshot_classifies_lead_evidence_as_customer() -> None:
     assert report.product_evidence == []
 
 
-def test_product_signal_name_classifies_as_product_evidence() -> None:
+def test_product_excerpt_classifies_as_product_evidence() -> None:
     evidence = [
         {
-            "signal_name": "product_catalog",
+            "signal_name": "search_result",
             "source_excerpt": "0-10V dimmable LED driver datasheet",
             "source_url": "https://catalog.example/driver",
         },
@@ -180,10 +180,10 @@ def test_product_signal_name_classifies_as_product_evidence() -> None:
     assert report.customer_evidence == []
 
 
-def test_customer_signal_name_classifies_as_customer_evidence() -> None:
+def test_unmarked_lead_excerpt_defaults_to_customer_evidence() -> None:
     evidence = [
         {
-            "signal_name": "contact_discovery",
+            "signal_name": "manual_entry",
             "source_excerpt": "Anna Weber, Purchasing Manager at Berlin Lighting.",
             "source_url": "https://linkedin.com/in/anna-weber",
         },
@@ -198,6 +198,29 @@ def test_customer_signal_name_classifies_as_customer_evidence() -> None:
     )
 
     assert report.customer_evidence == ["Anna Weber, Purchasing Manager at Berlin Lighting."]
+    assert report.product_evidence == []
+
+
+def test_word_boundaries_prevent_abbreviation_overmatch() -> None:
+    evidence = [
+        {
+            "signal_name": "search_result",
+            "source_excerpt": "Incentive catalog for corporate LED drivers.",
+            "source_url": "https://example.com",
+        },
+    ]
+    report = evaluate_draft(
+        subject="Dimmable LED drivers for your retail lighting range",
+        body=(
+            "Your LED retail fixtures match our 0-10V dimmable drivers. "
+            "Would a 15-minute call next week be useful?"
+        ),
+        evidence=evidence,
+    )
+
+    # "inc"/"corp" must not match inside "incentive"/"corporate"; "catalog" wins.
+    assert report.product_evidence == ["Incentive catalog for corporate LED drivers."]
+    assert report.customer_evidence == []
 
 
 def test_product_context_satisfies_citation_outside_generic_noun_list() -> None:

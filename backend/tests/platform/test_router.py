@@ -1696,6 +1696,40 @@ def test_resend_short_circuits_when_draft_already_sent() -> None:
     assert len(client.email_connector.sent_messages) == 1  # type: ignore[attr-defined]
 
 
+def test_email_draft_list_omits_quality_and_detail_includes_it() -> None:
+    client, factory = configured_client()
+    lead_id, contact_id = _seed_email_draft_lead(
+        client,
+        factory,
+        company_name="Quality Detail GmbH",
+        contact_name="Buyer",
+        email="buyer@quality-detail.example",
+        run_key="quality-detail-route-run",
+    )
+
+    draft = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/email-drafts",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={"contact_id": contact_id},
+    )
+    draft_id = draft.json()["id"]
+
+    listed = client.get(
+        f"/discovery/organizations/{client.acme_id}/email-drafts",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    detail = client.get(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{draft_id}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert listed.status_code == 200
+    assert listed.json()[0]["quality"] is None
+    assert detail.status_code == 200
+    assert detail.json()["quality"] is not None
+    assert detail.json()["quality"]["passed"] is True
+
+
 def test_reply_follow_up_marks_customer_interested() -> None:
     client, factory = configured_client()
     with factory.begin() as session:

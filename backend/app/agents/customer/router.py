@@ -391,7 +391,7 @@ class EmailDraftResponse(BaseModel):
     send_blocked: bool
     send_risk_level: str
     send_risk_message: str
-    quality: QualityReportResponse
+    quality: QualityReportResponse | None
 
 
 class LeadDetailResponse(LeadResponse):
@@ -573,10 +573,15 @@ def email_draft_send_assessment(contact: CRMContact | None) -> dict[str, str | b
     }
 
 
-def email_draft_response(draft: EmailDraft, session: Session) -> EmailDraftResponse:
+def email_draft_response(draft: EmailDraft, session: Session, *, include_quality: bool = True) -> EmailDraftResponse:
     lead = session.scalar(select(Lead).where(Lead.id == draft.lead_id))
     contact = session.scalar(select(CRMContact).where(CRMContact.id == draft.contact_id))
     send_assessment = email_draft_send_assessment(contact)
+    quality = (
+        quality_report_dict(LeadService(session).evaluate_email_draft_quality(draft))
+        if include_quality
+        else None
+    )
     return EmailDraftResponse(
         id=draft.id,
         organization_id=draft.organization_id,
@@ -608,7 +613,7 @@ def email_draft_response(draft: EmailDraft, session: Session) -> EmailDraftRespo
         send_blocked=bool(send_assessment["blocked"]),
         send_risk_level=str(send_assessment["level"]),
         send_risk_message=str(send_assessment["message"]),
-        quality=quality_report_dict(LeadService(session).evaluate_email_draft_quality(draft)),
+        quality=quality,
     )
 
 
@@ -1543,12 +1548,32 @@ def list_email_drafts(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
     service = LeadService(session)
     return [
-        email_draft_response(draft, session)
+        email_draft_response(draft, session, include_quality=False)
         for draft in service.list_email_drafts(
             organization_id=organization_id,
             status_filter=status_filter,
         )
     ]
+
+
+@router.get(
+    "/organizations/{organization_id}/email-drafts/{draft_id}",
+    response_model=EmailDraftResponse,
+)
+def get_email_draft(
+    organization_id: str,
+    draft_id: str,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> EmailDraftResponse:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+        draft = LeadService(session).get_email_draft(draft_id, organization_id)
+    except PermissionError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except LookupError as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    return email_draft_response(draft, session)
 
 
 @router.get(

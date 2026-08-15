@@ -1038,6 +1038,10 @@ class LeadService:
             subject=draft.subject,
             body=draft.body,
             evidence=draft.evidence_snapshot,
+            # No model carries a per-organization outreach language yet; default to
+            # English here. When a language setting lands (e.g. organization.outreach_language),
+            # resolve it and pass it as requested_language.
+            requested_language="en",
             product_context=email_product_context(product_line),
             contact_context=email_contact_context(lead, contact),
         )
@@ -1399,7 +1403,6 @@ def build_email_body(
         "We would be glad to share our catalog, specifications, and quotation options for your "
         "review. If you are currently sourcing these products, could you let me know which types "
         "or specifications are most relevant to you?\n\n"
-        "Would it be appropriate for me to send a brief catalog and pricing information?\n\n"
         "Best regards,\n"
         "Export Sales Team"
     )

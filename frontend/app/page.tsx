@@ -22,6 +22,7 @@ import {
   getLeadDetail,
   getCustomerDevelopmentConnectors,
   getEmailDeliveryStatus,
+  getEmailDraft,
   getPublicProductCatalogUrl,
   listEmailDrafts,
   listFollowUpTasks,
@@ -2030,36 +2031,46 @@ function ReviewDrawer({
             <div className="qualityReport">
               <div className="qualityHeader">
                 <strong>质量检查</strong>
-                <span className={draft.quality.passed ? "status statusQualified" : "status statusPriority"}>
-                  {draft.quality.passed ? "通过" : "未通过"}
-                </span>
+                {draft.quality == null ? (
+                  <span className="status statusNew">加载中</span>
+                ) : (
+                  <span className={draft.quality.passed ? "status statusQualified" : "status statusPriority"}>
+                    {draft.quality.passed ? "通过" : "未通过"}
+                  </span>
+                )}
               </div>
-              {draft.quality.issues.length > 0 && (
-                <ul className="qualityIssues">
-                  {draft.quality.issues.map((issue) => (
-                    <li key={issue.code}>
-                      <span className="qualityIssueCode">{issue.code}</span>
-                      <p>{issue.message}</p>
-                      <small>{issue.suggestion}</small>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {(draft.quality.product_evidence.length > 0 || draft.quality.customer_evidence.length > 0) && (
-                <div className="qualityEvidence">
-                  {draft.quality.product_evidence.length > 0 && (
-                    <div>
-                      <strong>产品依据</strong>
-                      {draft.quality.product_evidence.map((item) => <span key={item}>{item}</span>)}
+              {draft.quality == null ? (
+                <p className="qualityEmpty">正在加载质量检查报告…</p>
+              ) : (
+                <>
+                  {draft.quality.issues.length > 0 && (
+                    <ul className="qualityIssues">
+                      {draft.quality.issues.map((issue) => (
+                        <li key={issue.code}>
+                          <span className="qualityIssueCode">{issue.code}</span>
+                          <p>{issue.message}</p>
+                          <small>{issue.suggestion}</small>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {(draft.quality.product_evidence.length > 0 || draft.quality.customer_evidence.length > 0) && (
+                    <div className="qualityEvidence">
+                      {draft.quality.product_evidence.length > 0 && (
+                        <div>
+                          <strong>产品依据</strong>
+                          {draft.quality.product_evidence.map((item) => <span key={item}>{item}</span>)}
+                        </div>
+                      )}
+                      {draft.quality.customer_evidence.length > 0 && (
+                        <div>
+                          <strong>客户依据</strong>
+                          {draft.quality.customer_evidence.map((item) => <span key={item}>{item}</span>)}
+                        </div>
+                      )}
                     </div>
                   )}
-                  {draft.quality.customer_evidence.length > 0 && (
-                    <div>
-                      <strong>客户依据</strong>
-                      {draft.quality.customer_evidence.map((item) => <span key={item}>{item}</span>)}
-                    </div>
-                  )}
-                </div>
+                </>
               )}
             </div>
             <form className="recipientEditForm" onSubmit={onSaveRecipient} key={`recipient-${draft.id}-${draft.current_contact_email}-${draft.contact_email}`}>
@@ -2108,7 +2119,7 @@ function ReviewDrawer({
                 <button className="outlineButton" type="submit" disabled={saving || draft.status !== "pending_approval"}>
                   {saving ? "保存中..." : "保存修改"}
                 </button>
-                <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "pending_approval" || !draft.quality.passed} onClick={onApprove}>
+                <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "pending_approval" || draft.quality == null || !draft.quality.passed} onClick={onApprove}>
                   {reviewing ? "审批中..." : "批准为待发送"}
                 </button>
                 <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "ready_to_send" || draft.send_blocked} onClick={onMarkSent}>
@@ -2749,6 +2760,23 @@ export default function HomePage() {
     () => emailDrafts.find((draft) => draft.id === selectedDraftId) ?? emailDrafts[0] ?? null,
     [emailDrafts, selectedDraftId]
   );
+  useEffect(() => {
+    if (!session || !reviewOpen || !selectedDraftId) return;
+    const draft = emailDrafts.find((item) => item.id === selectedDraftId);
+    if (!draft || draft.quality != null) return;
+    let cancelled = false;
+    getEmailDraft(session, selectedDraftId)
+      .then((detail) => {
+        if (cancelled) return;
+        setEmailDrafts((current) => current.map((item) => (item.id === detail.id ? detail : item)));
+      })
+      .catch(() => {
+        // The list row stays without a report; the drawer renders a fallback state.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session, reviewOpen, selectedDraftId, emailDrafts]);
   const dashboardMetrics = useMemo(
     () => buildMetrics(leads, emailDrafts, followUps),
     [leads, emailDrafts, followUps]

@@ -76,3 +76,25 @@ def test_named_contact_and_english_product_name_are_preserved() -> None:
     assert subject == "Industrial Lighting supply discussion with Berlin Lighting GmbH"
     assert body.startswith("Dear Anna Weber,")
     assert "We supply Industrial Lighting" in body
+
+
+def test_auto_draft_emits_exactly_one_cta() -> None:
+    lead = Lead(
+        company_name="Berlin Lighting GmbH",
+        website="https://berlin-lighting.example",
+        canonical_domain="berlin-lighting.example",
+        target_market="Germany",
+        buyer_profile="Distributor",
+        score=80,
+        bucket=LeadBucket.PRIORITY_RECOMMENDATION,
+    )
+    contact = CRMContact(
+        name="Anna Weber",
+        title="Purchasing Manager",
+        email="anna@berlin-lighting.example",
+    )
+    product_line = ProductLine(name="Industrial Lighting")
+
+    body = build_email_body(lead=lead, contact=contact, product_line=product_line, evidence=[])
+
+    assert body.count("?") == 1

@@ -427,7 +427,7 @@ export type EmailDraft = {
   send_blocked: boolean;
   send_risk_level: "safe" | "caution" | "warning" | "blocked";
   send_risk_message: string;
-  quality: EmailDraftQuality;
+  quality: EmailDraftQuality | null;
 };
 
 export type KnowledgeDocumentStatus = "uploaded" | "processing" | "ready" | "failed";
@@ -450,6 +450,25 @@ export class ApiError extends Error {
   }
 }
 
+function formatErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((issue) => {
+        if (!issue || typeof issue !== "object") return String(issue);
+        const record = issue as Record<string, unknown>;
+        const code = typeof record.code === "string" ? record.code : "";
+        const message = typeof record.message === "string" ? record.message : "";
+        const suggestion = typeof record.suggestion === "string" ? record.suggestion : "";
+        return [code && `[${code}]`, message, suggestion && `建议：${suggestion}`]
+          .filter(Boolean)
+          .join(" ");
+      })
+      .join("\n");
+  }
+  return "Request failed";
+}
+
 async function requestJson<T>(session: Session, path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${apiUrl}${path}`, {
     ...init,
@@ -463,13 +482,10 @@ async function requestJson<T>(session: Session, path: string, init: RequestInit 
   if (response.status === 401) clearSession();
   if (!response.ok) {
     const detail =
-      typeof data === "object" &&
-      data !== null &&
-      "detail" in data &&
-      typeof data.detail === "string"
-        ? data.detail
-        : "Request failed";
-    throw new ApiError(detail, response.status);
+      typeof data === "object" && data !== null && "detail" in data
+        ? (data as { detail: unknown }).detail
+        : undefined;
+    throw new ApiError(formatErrorDetail(detail), response.status);
   }
   return data as T;
 }
@@ -790,6 +806,13 @@ export function listEmailDrafts(session: Session, statusFilter?: EmailDraftStatu
   return requestJson<EmailDraft[]>(
     session,
     `/discovery/organizations/${session.organization_id}/email-drafts${query}`
+  );
+}
+
+export function getEmailDraft(session: Session, draftId: string) {
+  return requestJson<EmailDraft>(
+    session,
+    `/discovery/organizations/${session.organization_id}/email-drafts/${draftId}`
   );
 }
 
