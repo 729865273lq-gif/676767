@@ -2027,6 +2027,41 @@ function ReviewDrawer({
                 )}
               </div>
             </article>
+            <div className="qualityReport">
+              <div className="qualityHeader">
+                <strong>质量检查</strong>
+                <span className={draft.quality.passed ? "status statusQualified" : "status statusPriority"}>
+                  {draft.quality.passed ? "通过" : "未通过"}
+                </span>
+              </div>
+              {draft.quality.issues.length > 0 && (
+                <ul className="qualityIssues">
+                  {draft.quality.issues.map((issue) => (
+                    <li key={issue.code}>
+                      <span className="qualityIssueCode">{issue.code}</span>
+                      <p>{issue.message}</p>
+                      <small>{issue.suggestion}</small>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {(draft.quality.product_evidence.length > 0 || draft.quality.customer_evidence.length > 0) && (
+                <div className="qualityEvidence">
+                  {draft.quality.product_evidence.length > 0 && (
+                    <div>
+                      <strong>产品依据</strong>
+                      {draft.quality.product_evidence.map((item) => <span key={item}>{item}</span>)}
+                    </div>
+                  )}
+                  {draft.quality.customer_evidence.length > 0 && (
+                    <div>
+                      <strong>客户依据</strong>
+                      {draft.quality.customer_evidence.map((item) => <span key={item}>{item}</span>)}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <form className="recipientEditForm" onSubmit={onSaveRecipient} key={`recipient-${draft.id}-${draft.current_contact_email}-${draft.contact_email}`}>
               <label>
                 客户邮箱地址
@@ -2073,7 +2108,7 @@ function ReviewDrawer({
                 <button className="outlineButton" type="submit" disabled={saving || draft.status !== "pending_approval"}>
                   {saving ? "保存中..." : "保存修改"}
                 </button>
-                <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "pending_approval"} onClick={onApprove}>
+                <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "pending_approval" || !draft.quality.passed} onClick={onApprove}>
                   {reviewing ? "审批中..." : "批准为待发送"}
                 </button>
                 <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "ready_to_send" || draft.send_blocked} onClick={onMarkSent}>

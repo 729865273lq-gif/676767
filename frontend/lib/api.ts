@@ -343,6 +343,19 @@ export type ContactPayload = {
 
 export type EmailDraftStatus = "pending_approval" | "ready_to_send" | "sent" | "rejected";
 
+export type EmailQualityIssue = {
+  code: string;
+  message: string;
+  suggestion: string;
+};
+
+export type EmailDraftQuality = {
+  passed: boolean;
+  issues: EmailQualityIssue[];
+  product_evidence: string[];
+  customer_evidence: string[];
+};
+
 export type WebsiteInquiryStatus = "new" | "converted" | "dismissed";
 
 export type WebsiteInquiry = {
@@ -414,6 +427,7 @@ export type EmailDraft = {
   send_blocked: boolean;
   send_risk_level: "safe" | "caution" | "warning" | "blocked";
   send_risk_message: string;
+  quality: EmailDraftQuality;
 };
 
 export type KnowledgeDocumentStatus = "uploaded" | "processing" | "ready" | "failed";

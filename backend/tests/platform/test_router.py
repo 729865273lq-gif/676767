@@ -1125,7 +1125,11 @@ def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
         json={
             "subject": "Edited subject",
-            "body": "Edited body with reviewer changes.",
+            "body": (
+                "Dear Anna Weber, your LED retail fixtures match our 0-10V dimmable drivers. "
+                "We can share tested specifications for your next range review. "
+                "Would a 15-minute call next week be useful?"
+            ),
         },
     )
     approved_draft = client.post(
@@ -1134,6 +1138,10 @@ def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
         json={"action": "approve"},
     )
     sent_draft = client.post(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{email_draft_id}/send",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    duplicate_send = client.post(
         f"/discovery/organizations/{client.acme_id}/email-drafts/{email_draft_id}/send",  # type: ignore[attr-defined]
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
     )
@@ -1205,6 +1213,9 @@ def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
     assert sent_draft.json()["sent_by_user_id"] == client.member_id  # type: ignore[attr-defined]
     assert sent_draft.json()["sent_at"] is not None
     assert sent_draft.json()["provider_message_id"] == "fake-provider-message-id"
+    assert duplicate_send.status_code == 200
+    assert duplicate_send.json()["status"] == EmailDraftStatus.SENT
+    assert duplicate_send.json()["provider_message_id"] == "fake-provider-message-id"
     assert updated_sent_contact_email.status_code == 200
     assert updated_sent_contact_email.json()["contact_email"] == "anna@follow-up.example"
     assert updated_sent_contact_email.json()["current_contact_email"] == "new-buyer@follow-up.example"
@@ -1213,7 +1224,11 @@ def test_customer_detail_routes_update_status_and_record_follow_up() -> None:
     sent_message, idempotency_key = client.email_connector.sent_messages[0]  # type: ignore[attr-defined]
     assert sent_message.recipients == ["anna@follow-up.example"]
     assert sent_message.subject == "Edited subject"
-    assert sent_message.body == "Edited body with reviewer changes."
+    assert sent_message.body == (
+        "Dear Anna Weber, your LED retail fixtures match our 0-10V dimmable drivers. "
+        "We can share tested specifications for your next range review. "
+        "Would a 15-minute call next week be useful?"
+    )
     assert idempotency_key == f"email-draft:{email_draft_id}"
     assert sent_detail.json()["status"] == LeadStatus.CONTACTED
     assert any(
@@ -1482,6 +1497,17 @@ def test_email_send_blocks_invalid_verified_contact() -> None:
         headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
         json={"contact_id": contact_id},
     )
+    edited = client.patch(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{draft.json()['id']}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={
+            "subject": "Dimmable LED drivers for your lighting range",
+            "body": (
+                "Dear Invalid Buyer, your lighting fixtures match our dimmable LED drivers. "
+                "Would a 15-minute call next week be useful?"
+            ),
+        },
+    )
     approved = client.post(
         f"/discovery/organizations/{client.acme_id}/email-drafts/{draft.json()['id']}/review",  # type: ignore[attr-defined]
         headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
@@ -1495,12 +1521,126 @@ def test_email_send_blocks_invalid_verified_contact() -> None:
     assert draft.status_code == 201
     assert draft.json()["send_blocked"] is True
     assert draft.json()["send_risk_level"] == "blocked"
+    assert edited.status_code == 200
+    assert edited.json()["quality"]["passed"] is True
     assert approved.status_code == 200
     assert approved.json()["status"] == EmailDraftStatus.READY_TO_SEND
     assert approved.json()["send_blocked"] is True
     assert blocked.status_code == 409
     assert "email verification blocks sending" in blocked.json()["detail"]
     assert client.email_connector.sent_messages == []  # type: ignore[attr-defined]
+
+
+def _seed_email_draft_lead(client, factory, *, company_name, contact_name, email, run_key):
+    with factory.begin() as session:
+        product_line = ProductLine(organization_id=client.acme_id, name="Lighting")  # type: ignore[attr-defined]
+        session.add(product_line)
+        session.flush()
+        workflow_run = WorkflowRun(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            agent_id="manual_crm",
+            agent_version="1.0.0",
+            input_json={},
+            idempotency_key=run_key,
+        )
+        session.add(workflow_run)
+        session.flush()
+        domain = company_name.lower().replace(" ", "-")
+        lead = Lead(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            workflow_run_id=workflow_run.id,
+            product_line_id=product_line.id,
+            company_name=company_name,
+            website=f"https://{domain}.example",
+            canonical_domain=f"{domain}.example",
+            target_market="Germany",
+            buyer_profile="distributor",
+            score=70,
+            bucket=LeadBucket.NEEDS_ENRICHMENT,
+            reasons=["manual test lead"],
+            missing_signals=[],
+        )
+        session.add(lead)
+        session.flush()
+        contact = CRMContact(
+            organization_id=client.acme_id,  # type: ignore[attr-defined]
+            lead_id=lead.id,
+            name=contact_name,
+            title="Purchasing",
+            email=email,
+            email_verification_provider="ZeroBounce",
+            email_verification_status="valid",
+            is_primary=True,
+        )
+        session.add(contact)
+        session.flush()
+        return lead.id, contact.id
+
+
+def test_unapproved_draft_never_reaches_email_connector() -> None:
+    client, factory = configured_client()
+    lead_id, contact_id = _seed_email_draft_lead(
+        client,
+        factory,
+        company_name="Unapproved GmbH",
+        contact_name="Buyer",
+        email="buyer@unapproved.example",
+        run_key="unapproved-send-route-run",
+    )
+
+    draft = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/email-drafts",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={"contact_id": contact_id},
+    )
+    blocked = client.post(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{draft.json()['id']}/send",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert draft.status_code == 201
+    assert draft.json()["status"] == EmailDraftStatus.PENDING_APPROVAL
+    assert blocked.status_code == 409
+    assert "only ready-to-send drafts can be sent" in blocked.json()["detail"]
+    assert client.email_connector.sent_messages == []  # type: ignore[attr-defined]
+
+
+def test_review_approve_rejects_generic_draft_with_repair_codes() -> None:
+    client, factory = configured_client()
+    lead_id, contact_id = _seed_email_draft_lead(
+        client,
+        factory,
+        company_name="Generic Draft GmbH",
+        contact_name="Buyer",
+        email="buyer@generic-draft.example",
+        run_key="generic-draft-route-run",
+    )
+
+    draft = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/email-drafts",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={"contact_id": contact_id},
+    )
+    edited = client.patch(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{draft.json()['id']}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={"subject": "Hello", "body": "We offer good products. Please reply."},
+    )
+    approved = client.post(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{draft.json()['id']}/review",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
+        json={"action": "approve"},
+    )
+
+    assert edited.status_code == 200
+    assert edited.json()["quality"]["passed"] is False
+    assert {issue["code"] for issue in edited.json()["quality"]["issues"]} >= {
+        "missing_product_evidence",
+        "missing_personalization",
+    }
+    assert approved.status_code == 409
+    assert "missing_product_evidence" in approved.json()["detail"]
+    assert "missing_personalization" in approved.json()["detail"]
 
 
 def test_reply_follow_up_marks_customer_interested() -> None:

@@ -47,6 +47,7 @@ from app.connectors.search import (
     SearchConnector,
     TomTomSearchConnector,
 )
+from app.crm.email_quality import evaluate_draft, quality_report_dict
 from app.crm.models import (
     CRMContact,
     EmailDraft,
@@ -346,6 +347,19 @@ class ReviewEmailDraftRequest(BaseModel):
     rejection_reason: str = Field(default="", max_length=1_000)
 
 
+class QualityIssueResponse(BaseModel):
+    code: str
+    message: str
+    suggestion: str
+
+
+class QualityReportResponse(BaseModel):
+    passed: bool
+    issues: list[QualityIssueResponse]
+    product_evidence: list[str]
+    customer_evidence: list[str]
+
+
 class EmailDraftResponse(BaseModel):
     id: str
     organization_id: str
@@ -377,6 +391,7 @@ class EmailDraftResponse(BaseModel):
     send_blocked: bool
     send_risk_level: str
     send_risk_message: str
+    quality: QualityReportResponse
 
 
 class LeadDetailResponse(LeadResponse):
@@ -593,6 +608,13 @@ def email_draft_response(draft: EmailDraft, session: Session) -> EmailDraftRespo
         send_blocked=bool(send_assessment["blocked"]),
         send_risk_level=str(send_assessment["level"]),
         send_risk_message=str(send_assessment["message"]),
+        quality=quality_report_dict(
+            evaluate_draft(
+                subject=draft.subject,
+                body=draft.body,
+                evidence=draft.evidence_snapshot,
+            )
+        ),
     )
 
 
@@ -1694,6 +1716,9 @@ def mark_email_draft_sent(
     try:
         OrganizationService(session).require_membership(principal.user_id, organization_id)
         service = LeadService(session)
+        draft = service.get_email_draft(draft_id, organization_id)
+        if draft.status == EmailDraftStatus.SENT:
+            return email_draft_response(draft, session)
         draft, outbound_message = service.email_draft_outbound_message(
             draft_id=draft_id,
             organization_id=organization_id,

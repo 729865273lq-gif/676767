@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.agents.base.contracts import OutboundMessage, SearchResult
 from app.connectors.contact_discovery import DiscoveredContact
 from app.connectors.email_verification import EmailVerificationResult
+from app.crm.email_quality import evaluate_draft, quality_gate_error
 from app.crm.models import (
     CRMContact,
     EmailDraft,
@@ -1084,6 +1085,13 @@ class LeadService:
         if draft.status != EmailDraftStatus.PENDING_APPROVAL:
             raise ValueError("only pending drafts can be reviewed")
         if action == "approve":
+            report = evaluate_draft(
+                subject=draft.subject,
+                body=draft.body,
+                evidence=draft.evidence_snapshot,
+            )
+            if not report.passed:
+                raise quality_gate_error(report)
             draft.status = EmailDraftStatus.READY_TO_SEND
             draft.rejection_reason = ""
         elif action == "reject":
