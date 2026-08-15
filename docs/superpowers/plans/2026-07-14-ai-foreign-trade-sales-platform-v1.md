@@ -575,7 +575,7 @@ def test_metrics_count_only_current_organization(dashboard_service, organization
 
 Expose discovered, qualified, priority, saved, review-ready, approved, sent, replied, and opportunity metrics; show reply rate and conversion per product line. Build inbox filters by intent and due date, suggested reply editor, task completion, and company timeline links. UI must render stable empty, loading, connector-error, and permission-denied states.
 
-- [x] **Step 7: Verify pilot acceptance in browser and API suites**
+- [ ] **Step 7: Verify pilot acceptance in browser and API suites**
 
 Implement `sales-loop.spec.ts` to create a qualifying lead, bulk save it, generate a draft, fail then pass quality gate, approve/send once through a fake connector, sync a reply, and observe resulting inbox task/timeline. Run responsive assertions at 1440x900 and 390x844.
 
@@ -600,3 +600,11 @@ Commit: `git add backend frontend docs && git commit -m "feat: complete pilot-re
 - [ ] The email review UI displays a passing quality report with product/customer citations before approval becomes available.
 - [ ] The inbox displays synchronized reply intent, suggested response, and follow-up task.
 - [ ] Pilot funnel metrics are organization- and product-line-scoped and include the accepted targets.
+
+---
+
+## Execution Status Note (DSH continuation, 2026-08-15)
+
+- Tasks 1-6 complete; Task 7 steps 1-6 and 8 complete.
+- Step 7 (browser sales-loop.spec.ts) was delivered as a backend integration test (ackend/tests/integration/test_sales_loop.py) plus the inbox workbench e2e (rontend/e2e/inbox.spec.ts); a full browser acceptance of the sales loop remains as a manual pilot exercise (see docs/operations/pilot-runbook.md).
+- Mailbox sync uses IMAP polling (QQ Mail compatible) instead of Gmail/Microsoft Graph, per network constraints.
