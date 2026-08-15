@@ -4,7 +4,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from app.connectors.contact_discovery import ContactDiscoveryConnector
@@ -19,8 +18,7 @@ from app.connectors.llm import (
 )
 from app.connectors.search import SearchConnector
 from app.connectors.storage import S3StorageConnector, StorageConnector
-from app.crm.inbox import InboxService
-from app.crm.models import MailboxCursor
+from app.crm.inbox import InboxService, poll_organization_ids
 from app.shared.config import Settings
 from app.shared.db import build_session_factory
 
@@ -49,9 +47,7 @@ async def _inbox_poll_loop(app: FastAPI, settings: Settings) -> None:
         try:
             session = app.state.session_factory()
             try:
-                organization_ids = list(
-                    session.scalars(select(MailboxCursor.organization_id).distinct()).all()
-                )
+                organization_ids = poll_organization_ids(session)
             finally:
                 session.close()
             for organization_id in organization_ids:

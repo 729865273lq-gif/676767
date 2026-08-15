@@ -317,6 +317,7 @@ class MailboxCursor(Base):
     )
     mailbox: Mapped[str] = mapped_column(String(120), primary_key=True)
     last_uid: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    uidvalidity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False
     )

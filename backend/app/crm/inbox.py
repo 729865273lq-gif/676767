@@ -5,6 +5,7 @@ from datetime import timedelta
 from enum import StrEnum
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.connectors.email.imap import ImapConfigurationError, ImapConnector, InboundEmailRecord
@@ -49,7 +50,7 @@ class ReplyClassification:
     suggested_reply: str
 
 
-_OUT_OF_OFFICE_SUBJECT_MARKERS = (
+_OUT_OF_OFFICE_MARKERS = (
     "out of office",
     "out-of-office",
     "automatic reply",
@@ -60,6 +61,7 @@ _OUT_OF_OFFICE_SUBJECT_MARKERS = (
     "on leave",
     "away from",
     "out of the office",
+    "will be back",
     "自动回复",
     "自动答复",
     "休假",
@@ -157,11 +159,13 @@ def classify_reply(subject: str, body: str, product_line_name: str = "") -> Repl
     """Deterministic rule-based reply classification (no LLM required)."""
     subject_lower = subject.strip().lower()
     body_lower = body.strip().lower()
-    if any(marker in subject_lower for marker in _OUT_OF_OFFICE_SUBJECT_MARKERS):
+    if any(marker in subject_lower for marker in _OUT_OF_OFFICE_MARKERS) or any(
+        marker in body_lower for marker in _OUT_OF_OFFICE_MARKERS
+    ):
         return ReplyClassification(
             intent=ReplyIntent.OUT_OF_OFFICE.value,
             confidence=0.95,
-            rationale="Subject matches automatic out-of-office reply patterns.",
+            rationale="Subject or body matches automatic out-of-office reply patterns.",
             suggested_reply=_suggested_reply(ReplyIntent.OUT_OF_OFFICE, product_line_name),
         )
     if any(marker in body_lower for marker in _NOT_INTERESTED_MARKERS):
@@ -267,22 +271,43 @@ class InboxService:
     def _sync(self, organization_id: str, mailbox: str) -> int:
         cursor = self.session.get(MailboxCursor, (organization_id, mailbox))
         last_uid = cursor.last_uid if cursor is not None else 0
+        uidvalidity = self.imap_connector.uidvalidity(mailbox)
+        if (
+            uidvalidity is not None
+            and cursor is not None
+            and cursor.uidvalidity is not None
+            and cursor.uidvalidity != uidvalidity
+        ):
+            # The mailbox was rebuilt and UIDs were reassigned; rescan everything.
+            # Re-inserts are idempotent thanks to the UNIQUE provider-message-id key.
+            last_uid = 0
         # Capture the high-water mark before fetching so a message delivered during the
         # fetch is simply re-read next poll (idempotent) rather than silently skipped.
         latest = self.imap_connector.latest_uid(mailbox)
         records = self.imap_connector.list_since_uid(mailbox, last_uid)
         new_count = 0
         for record in records:
-            if self._upsert_message(organization_id, record):
+            try:
+                with self.session.begin_nested():
+                    inserted = self._upsert_message(organization_id, record)
+            except IntegrityError:
+                # A concurrent sync already inserted this provider_message_id; skip it.
+                continue
+            if inserted:
                 new_count += 1
         if latest is not None:
             if cursor is None:
                 cursor = MailboxCursor(
-                    organization_id=organization_id, mailbox=mailbox, last_uid=latest
+                    organization_id=organization_id,
+                    mailbox=mailbox,
+                    last_uid=latest,
+                    uidvalidity=uidvalidity,
                 )
                 self.session.add(cursor)
             else:
                 cursor.last_uid = latest
+                if uidvalidity is not None:
+                    cursor.uidvalidity = uidvalidity
         return new_count
 
     def _upsert_message(self, organization_id: str, record: InboundEmailRecord) -> bool:
@@ -363,11 +388,12 @@ class InboxService:
             return rule
         valid_intents = {intent.value for intent in ReplyIntent}
         if refined in valid_intents:
+            refined_intent = ReplyIntent(refined)
             return ReplyClassification(
                 intent=refined,
                 confidence=max(rule.confidence, 0.9),
                 rationale=f"{rule.rationale} Refined via LLM.",
-                suggested_reply=rule.suggested_reply,
+                suggested_reply=_suggested_reply(refined_intent, product_line_name),
             )
         return rule
 
@@ -486,3 +512,12 @@ def _canonical_domain_for_email(email: str) -> str | None:
         return canonical_domain(website_from_email(email))
     except ValueError:
         return None
+
+
+def poll_organization_ids(session: Session) -> list[str]:
+    """Organization ids that should be polled: any org with a lead or an inbox cursor."""
+    return list(
+        session.scalars(
+            select(Lead.organization_id).union(select(MailboxCursor.organization_id))
+        )
+    )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html as html_module
 import imaplib
 import re
 from dataclasses import dataclass
@@ -36,6 +37,7 @@ class InboundEmailRecord:
 
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+_BLOCK_TAG_RE = re.compile(r"<br\s*/?>|</p\s*>|</div\s*>", re.IGNORECASE)
 
 
 class ImapConnector:
@@ -111,6 +113,17 @@ class ImapConnector:
         except (OSError, imaplib.IMAP4.error) as error:
             raise ImapError("IMAP mailbox could not be read") from error
 
+    def uidvalidity(self, mailbox: str = "INBOX") -> int | None:
+        """Return the mailbox UIDVALIDITY token, or ``None`` when unavailable."""
+        try:
+            with self._connect() as imap:
+                self._login(imap)
+                return self._select(imap, mailbox)
+        except ImapError:
+            raise
+        except (OSError, imaplib.IMAP4.error) as error:
+            raise ImapError("IMAP mailbox could not be read") from error
+
     def _connect(self) -> imaplib.IMAP4 | imaplib.IMAP4_SSL:
         if self.ssl:
             return imaplib.IMAP4_SSL(self.host, self.port, timeout=30)
@@ -121,10 +134,11 @@ class ImapConnector:
         if status != "OK":
             raise ImapError("IMAP login failed")
 
-    def _select(self, imap: imaplib.IMAP4, mailbox: str) -> None:
+    def _select(self, imap: imaplib.IMAP4, mailbox: str) -> int | None:
         status, _ = imap.select(mailbox, readonly=True)
         if status != "OK":
             raise ImapError(f"IMAP could not open mailbox: {mailbox}")
+        return _parse_uidvalidity(imap)
 
     def _search_uids(self, imap: imaplib.IMAP4, since_uid: int) -> list[int]:
         criterion = f"UID {since_uid + 1}:*" if since_uid and since_uid > 0 else "ALL"
@@ -214,16 +228,48 @@ def _extract_body(message: Message) -> str:
 def _decode_part(part: Message, *, is_html: bool) -> str:
     try:
         payload = part.get_payload(decode=True)
-        if payload is None:
-            return ""
-        charset = part.get_content_charset() or "utf-8"
-        try:
-            text = payload.decode(charset, errors="replace")
-        except (LookupError, UnicodeDecodeError):
-            text = payload.decode("utf-8", errors="replace")
-        return _HTML_TAG_RE.sub(" ", text) if is_html else text
     except Exception:
         return ""
+    if payload is None:
+        return ""
+    charset = (part.get_content_charset() or "").strip().lower()
+    text = _decode_payload(payload, charset)
+    return _html_to_text(text) if is_html else text
+
+
+def _decode_payload(payload: bytes, charset: str) -> str:
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    if charset and charset not in {"utf-8", "utf8"}:
+        try:
+            return payload.decode(charset, errors="replace")
+        except (LookupError, UnicodeDecodeError):
+            pass
+    return payload.decode("latin-1")
+
+
+def _html_to_text(text: str) -> str:
+    text = _BLOCK_TAG_RE.sub("\n", text)
+    text = _HTML_TAG_RE.sub(" ", text)
+    return html_module.unescape(text)
+
+
+def _parse_uidvalidity(imap: imaplib.IMAP4) -> int | None:
+    try:
+        values = imap.response("UIDVALIDITY")
+    except Exception:
+        return None
+    if not values:
+        return None
+    raw = values[-1]
+    if isinstance(raw, bytes):
+        raw = raw.decode("ascii", errors="ignore")
+    try:
+        return int(raw)
+    except (ValueError, TypeError):
+        return None
 
 
 def _count_attachments(message: Message) -> int:

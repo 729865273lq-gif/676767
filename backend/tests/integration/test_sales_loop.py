@@ -24,6 +24,9 @@ class FakeImapConnector:
     def latest_uid(self, mailbox: str = "INBOX") -> int | None:
         return max(self.messages) if self.messages else None
 
+    def uidvalidity(self, mailbox: str = "INBOX") -> int | None:
+        return None
+
 
 def test_reply_sync_creates_analysis_follow_up_and_timeline(session, organizations) -> None:
     """Full sales loop: an outbound contact replies and the reply is analyzed end-to-end."""
