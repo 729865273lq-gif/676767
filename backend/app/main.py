@@ -43,7 +43,7 @@ async def _inbox_poll_loop(app: FastAPI, settings: Settings) -> None:
     # worker. This can later be replaced by a Celery beat schedule or a dedicated worker.
     logger.info("IMAP inbox poll loop started (every %s seconds)", settings.inbox_poll_seconds)
     while True:
-        await asyncio.sleep(settings.inbox_poll_seconds)
+        # Sync once on startup, then wait before the next round.
         try:
             session = app.state.session_factory()
             try:
@@ -65,6 +65,7 @@ async def _inbox_poll_loop(app: FastAPI, settings: Settings) -> None:
             raise
         except Exception:
             logger.exception("inbox poll iteration failed")
+        await asyncio.sleep(settings.inbox_poll_seconds)
 
 
 @asynccontextmanager

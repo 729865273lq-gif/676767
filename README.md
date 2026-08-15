@@ -44,6 +44,24 @@ SMTP_USE_TLS=true
 
 For Gmail or Outlook, use an app password or SMTP credential for local development. Production should move to OAuth before broad use.
 
+## Inbox sync (IMAP)
+
+Inbound replies are polled from an IMAP mailbox (no Gmail/Microsoft Graph dependency) and stored per workspace, classified by intent, and turned into follow-up tasks. Configure the same QQ Mail mailbox that sends outbound mail:
+
+```powershell
+IMAP_HOST=imap.qq.com
+IMAP_PORT=993
+IMAP_USERNAME=sender@qq.com
+IMAP_PASSWORD=your-imap-authorization-code
+IMAP_SENT_MAILBOX=
+INBOX_POLL_SECONDS=120
+```
+
+- QQ Mail requires the IMAP/SMTP service to be enabled on the account and an **authorization code** (not the login password) as `IMAP_PASSWORD`.
+- `INBOX_POLL_SECONDS` controls how often the background lifespan task polls the mailbox. If no `IMAP_*` credentials are configured, polling stays disabled.
+- The single shared mailbox is a single-tenant pilot assumption: a reply is stored under a workspace only when its sender matches one of that workspace's contacts/leads (or it is the sole workspace). A future multi-tenant deployment needs per-workspace mailbox routing.
+- Reply intent can optionally be refined by an OpenAI-compatible chat model; set `LLM_API_BASE`, `LLM_API_KEY`, and `LLM_MODEL` (defaults to `gpt-4o-mini`). Without these, classification is deterministic and rule-based.
+
 ## Customer development APIs
 
 The dashboard shows a read-only API readiness panel for the customer development flow. Add keys to `.env` as you connect providers:

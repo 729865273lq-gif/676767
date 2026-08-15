@@ -33,6 +33,7 @@ class InboxMessageListItem(BaseModel):
     intent_confidence: float
     suggested_reply: str
     follow_up_task_id: str | None
+    due_at: datetime | None
     created_at: datetime
 
 
@@ -50,6 +51,7 @@ class InboxMessageDetail(BaseModel):
     analysis_rationale: str
     suggested_reply: str
     follow_up_task_id: str | None
+    due_at: datetime | None
     linked_company_name: str | None
     created_at: datetime
 
@@ -90,7 +92,7 @@ def _llm_connector(request: Request) -> OpenAICompatibleChatConnector | None:
         return None
 
 
-def _list_item(message: InboundMessage) -> InboxMessageListItem:
+def _list_item(message: InboundMessage, service: InboxService) -> InboxMessageListItem:
     return InboxMessageListItem(
         id=message.id,
         provider_message_id=message.provider_message_id,
@@ -102,6 +104,7 @@ def _list_item(message: InboundMessage) -> InboxMessageListItem:
         intent_confidence=message.intent_confidence,
         suggested_reply=message.suggested_reply,
         follow_up_task_id=message.follow_up_task_id,
+        due_at=service.message_due_at(message),
         created_at=message.created_at,
     )
 
@@ -121,6 +124,7 @@ def _detail(message: InboundMessage, service: InboxService) -> InboxMessageDetai
         analysis_rationale=message.analysis_rationale,
         suggested_reply=message.suggested_reply,
         follow_up_task_id=message.follow_up_task_id,
+        due_at=service.message_due_at(message),
         linked_company_name=service.linked_company_name(message),
         created_at=message.created_at,
     )
@@ -171,7 +175,7 @@ def list_inbox(
         due_from=due_from,
         due_before=due_before,
     )
-    return [_list_item(message) for message in messages]
+    return [_list_item(message, service) for message in messages]
 
 
 @router.get(

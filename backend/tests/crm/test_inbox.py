@@ -83,7 +83,7 @@ def _make_lead(
     domain: str = "example.com",
     contact_email: str = "buyer@example.com",
 ) -> tuple[Lead, CRMContact]:
-    product_line = ProductLine(organization_id=organization.id, name="LED Lighting")
+    product_line = ProductLine(organization_id=organization.id, name=f"Product {domain}")
     workflow_run = WorkflowRun(
         organization_id=organization.id,
         agent_id="inbox-test",
@@ -357,6 +357,62 @@ def test_poll_organization_ids_includes_leads_and_cursors(session, organizations
     assert len(ids) == 2
 
 
+def test_single_tenant_stores_unmatched_and_backfills_later(session, organizations) -> None:
+    organization = organizations["acme"]
+    # Acme is the sole tenant: it already has a lead for an unrelated domain.
+    _make_lead(session, organization, domain="existing.example", contact_email="buyer@existing.example")
+    imap = FakeImapConnector(
+        {1: make_record("msg-1", "Re: Offer", "We are interested.", sender_email="new@newco.example")}
+    )
+    service = InboxService(session, imap)
+
+    # The sender matches no lead yet, but single-tenant means the reply is stored unlinked.
+    assert service.sync_organization_mailbox(organization.id) == 1
+    message = session.scalar(
+        select(InboundMessage).where(InboundMessage.provider_message_id == "msg-1")
+    )
+    assert message is not None
+    assert message.lead_id is None
+    assert message.follow_up_task_id is None
+
+    lead, _ = _make_lead(
+        session, organization, domain="newco.example", contact_email="new@newco.example"
+    )
+    cursor = session.get(MailboxCursor, (organization.id, "INBOX"))
+    assert cursor is not None
+    cursor.last_uid = 0
+    session.commit()
+
+    # Re-delivery backfills the association now that the lead exists.
+    assert service.sync_organization_mailbox(organization.id) == 0
+    session.refresh(message)
+    assert message.lead_id == lead.id
+    assert message.follow_up_task_id is not None
+    timeline = session.scalars(
+        select(FollowUpRecord).where(FollowUpRecord.lead_id == lead.id)
+    ).all()
+    assert any(record.activity_type == "reply_analyzed" for record in timeline)
+
+
+def test_multi_org_skips_unmatched_reply(session, organizations) -> None:
+    acme = organizations["acme"]
+    globex = organizations["globex"]
+    _make_lead(session, acme, domain="acme.example", contact_email="buyer@acme.example")
+    _make_lead(session, globex, domain="globex.example", contact_email="buyer@globex.example")
+    imap = FakeImapConnector(
+        {
+            1: make_record(
+                "msg-1", "Re: Offer", "We are interested.", sender_email="stranger@other.example"
+            )
+        }
+    )
+
+    synced = InboxService(session, imap).sync_organization_mailbox(acme.id)
+
+    assert synced == 0
+    assert session.scalar(select(func.count()).select_from(InboundMessage)) == 0
+
+
 def bearer_headers(user_id: str) -> dict[str, str]:
     token = PrincipalTokenCodec(APP_SECRET).issue(user_id, expires_at=int(time.time()) + 3_600)
     return {"Authorization": f"Bearer {token}"}
@@ -509,6 +565,7 @@ def test_router_filters_detail_and_follow_up_done() -> None:
             body_text="hello",
             received_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
             intent="interested",
+            lead_id=lead.id,
             follow_up_task_id=task1.id,
         )
         m2 = InboundMessage(
@@ -519,6 +576,7 @@ def test_router_filters_detail_and_follow_up_done() -> None:
             body_text="hello",
             received_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
             intent="question",
+            lead_id=lead.id,
             follow_up_task_id=task2.id,
             analysis_rationale="question rationale",
             suggested_reply="question reply",
@@ -531,9 +589,11 @@ def test_router_filters_detail_and_follow_up_done() -> None:
             body_text="hello",
             received_at=datetime(2026, 1, 3, tzinfo=timezone.utc),
             intent="other",
+            lead_id=lead.id,
         )
         session.add_all([m1, m2, m3])
         session.flush()
+        lead_id = lead.id
         m2_id = m2.id
         m3_id = m3.id
         task2_id = task2.id
@@ -560,12 +620,21 @@ def test_router_filters_detail_and_follow_up_done() -> None:
     assert detail_body["analysis_rationale"] == "question rationale"
     assert detail_body["suggested_reply"] == "question reply"
     assert detail_body["linked_company_name"] == "Router Buyer"
+    assert detail_body["due_at"] is not None
 
     done = client.post(f"{base}/{m2_id}/follow-up/done", headers=headers)
     assert done.status_code == 200
     assert done.json()["follow_up_status"] == "done"
     with factory.begin() as session:
         assert session.get(FollowUpTask, task2_id).status == FollowUpTaskStatus.DONE
+        done_record = session.scalar(
+            select(FollowUpRecord).where(
+                FollowUpRecord.lead_id == lead_id,
+                FollowUpRecord.activity_type == "task_done",
+            )
+        )
+        assert done_record is not None
+        assert done_record.actor_user_id == client.member_id  # type: ignore[attr-defined]
 
     conflict = client.post(f"{base}/{m3_id}/follow-up/done", headers=headers)
     assert conflict.status_code == 409

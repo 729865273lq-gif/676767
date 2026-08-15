@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 
 from sqlalchemy import func, select
@@ -20,6 +21,8 @@ from app.crm.models import (
 )
 from app.crm.service import canonical_domain, website_from_email
 from app.platform.models import ProductLine, utcnow
+
+logger = logging.getLogger(__name__)
 
 INBOX_MAILBOX = "INBOX"
 FOLLOW_UP_DUE_DAYS = 3
@@ -285,11 +288,12 @@ class InboxService:
         # fetch is simply re-read next poll (idempotent) rather than silently skipped.
         latest = self.imap_connector.latest_uid(mailbox)
         records = self.imap_connector.list_since_uid(mailbox, last_uid)
+        single_tenant = _is_single_tenant(self.session, organization_id)
         new_count = 0
         for record in records:
             try:
                 with self.session.begin_nested():
-                    inserted = self._upsert_message(organization_id, record)
+                    inserted = self._upsert_message(organization_id, record, single_tenant)
             except IntegrityError:
                 # A concurrent sync already inserted this provider_message_id; skip it.
                 continue
@@ -310,7 +314,9 @@ class InboxService:
                     cursor.uidvalidity = uidvalidity
         return new_count
 
-    def _upsert_message(self, organization_id: str, record: InboundEmailRecord) -> bool:
+    def _upsert_message(
+        self, organization_id: str, record: InboundEmailRecord, single_tenant: bool
+    ) -> bool:
         existing = self.session.scalar(
             select(InboundMessage).where(
                 InboundMessage.organization_id == organization_id,
@@ -318,8 +324,18 @@ class InboxService:
             )
         )
         if existing is not None:
+            self._backfill_association(organization_id, existing)
             return False
         lead = self._match_lead(organization_id, record.sender_email)
+        if lead is None and not single_tenant:
+            # Shared-mailbox multi-tenant pilot is unsupported: a message that belongs to
+            # no lead in this org is skipped rather than leaked into the wrong org.
+            logger.warning(
+                "Skipping inbox message %s: no matched lead in organization %s",
+                record.provider_message_id,
+                organization_id,
+            )
+            return False
         product_line_name = self._product_line_name(lead)
         classification = self._classify(record.subject, record.body_text, product_line_name)
         message = InboundMessage(
@@ -330,21 +346,38 @@ class InboxService:
             sender_name=record.sender_name,
             subject=record.subject,
             body_text=record.body_text,
+            attachments_count=record.attachments_count,
             received_at=record.received_at,
             intent=classification.intent,
             intent_confidence=classification.confidence,
             analysis_rationale=classification.rationale,
             suggested_reply=classification.suggested_reply,
+            lead_id=lead.id if lead is not None else None,
         )
         self.session.add(message)
         self.session.flush()
         if lead is not None:
-            self._append_timeline(organization_id, lead, message, classification)
+            self._append_timeline(organization_id, lead, message)
             if ReplyIntent(classification.intent) in FOLLOW_UP_INTENTS:
                 message.follow_up_task_id = self._create_follow_up_task(
-                    organization_id, lead, record
+                    organization_id, lead, record.sender_name or record.sender_email
                 ).id
         return True
+
+    def _backfill_association(self, organization_id: str, message: InboundMessage) -> None:
+        """Link an already-stored message once a matching lead finally exists."""
+        if message.lead_id is not None:
+            return
+        lead = self._match_lead(organization_id, message.sender_email)
+        if lead is None:
+            return
+        message.lead_id = lead.id
+        if message.follow_up_task_id is None:
+            self._append_timeline(organization_id, lead, message)
+            if ReplyIntent(message.intent) in FOLLOW_UP_INTENTS:
+                message.follow_up_task_id = self._create_follow_up_task(
+                    organization_id, lead, message.sender_name or message.sender_email
+                ).id
 
     def _match_lead(self, organization_id: str, sender_email: str) -> Lead | None:
         email = (sender_email or "").strip().lower()
@@ -391,18 +424,14 @@ class InboxService:
             refined_intent = ReplyIntent(refined)
             return ReplyClassification(
                 intent=refined,
-                confidence=max(rule.confidence, 0.9),
+                confidence=rule.confidence,
                 rationale=f"{rule.rationale} Refined via LLM.",
                 suggested_reply=_suggested_reply(refined_intent, product_line_name),
             )
         return rule
 
     def _append_timeline(
-        self,
-        organization_id: str,
-        lead: Lead,
-        message: InboundMessage,
-        classification: ReplyClassification,
+        self, organization_id: str, lead: Lead, message: InboundMessage
     ) -> None:
         sender = message.sender_name or message.sender_email
         self.session.add(
@@ -412,22 +441,21 @@ class InboxService:
                 actor_user_id=None,
                 activity_type="reply_analyzed",
                 content=(
-                    f"Reply from {sender} analyzed as {classification.intent} "
-                    f"(confidence {classification.confidence:.2f}): {classification.rationale}"
+                    f"Reply from {sender} analyzed as {message.intent} "
+                    f"(confidence {message.intent_confidence:.2f}): {message.analysis_rationale}"
                 ),
                 next_follow_up_at=None,
             )
         )
 
     def _create_follow_up_task(
-        self, organization_id: str, lead: Lead, record: InboundEmailRecord
+        self, organization_id: str, lead: Lead, sender_label: str
     ) -> FollowUpTask:
-        sender = record.sender_name or record.sender_email
         task = FollowUpTask(
             organization_id=organization_id,
             lead_id=lead.id,
             actor_user_id=None,
-            title=f"Follow up on reply from {sender}",
+            title=f"Follow up on reply from {sender_label}",
             task_type="reply_follow_up",
             quote_status="",
             due_at=utcnow() + timedelta(days=FOLLOW_UP_DUE_DAYS),
@@ -476,14 +504,22 @@ class InboxService:
         return message
 
     def linked_company_name(self, message: InboundMessage) -> str | None:
+        lead: Lead | None = None
+        if message.lead_id is not None:
+            lead = self.session.get(Lead, message.lead_id)
+        elif message.follow_up_task_id is not None:
+            lead = self.session.scalar(
+                select(Lead)
+                .join(FollowUpTask, FollowUpTask.lead_id == Lead.id)
+                .where(FollowUpTask.id == message.follow_up_task_id)
+            )
+        return lead.company_name if lead is not None else None
+
+    def message_due_at(self, message: InboundMessage) -> datetime | None:
         if message.follow_up_task_id is None:
             return None
-        lead = self.session.scalar(
-            select(Lead)
-            .join(FollowUpTask, FollowUpTask.lead_id == Lead.id)
-            .where(FollowUpTask.id == message.follow_up_task_id)
-        )
-        return lead.company_name if lead is not None else None
+        task = self.session.get(FollowUpTask, message.follow_up_task_id)
+        return task.due_at if task is not None else None
 
     def mark_follow_up_done(
         self, message_id: str, organization_id: str, actor_user_id: str
@@ -501,6 +537,16 @@ class InboxService:
             raise LookupError("follow-up task not found")
         task.status = FollowUpTaskStatus.DONE
         task.completed_at = utcnow()
+        self.session.add(
+            FollowUpRecord(
+                organization_id=organization_id,
+                lead_id=task.lead_id,
+                actor_user_id=actor_user_id,
+                activity_type="task_done",
+                content=f"Completed task: {task.title}",
+                next_follow_up_at=None,
+            )
+        )
         self.session.flush()
         return task
 
@@ -521,3 +567,15 @@ def poll_organization_ids(session: Session) -> list[str]:
             select(Lead.organization_id).union(select(MailboxCursor.organization_id))
         )
     )
+
+
+def _is_single_tenant(session: Session, organization_id: str) -> bool:
+    """True when ``organization_id`` is the only org with a lead or mailbox cursor.
+
+    The inbox reads one shared IMAP mailbox. Storing every message under every org would
+    duplicate content and leak one org's replies into another. The supported V1 pilot is a
+    single tenant, so unmatched messages are stored only on that sole org; in a multi-org
+    setup unmatched messages are skipped until a matching lead exists.
+    """
+    polled = poll_organization_ids(session)
+    return organization_id in polled and len(polled) == 1

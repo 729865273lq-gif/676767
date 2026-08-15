@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 import httpx
 
 from app.shared.config import Settings
@@ -87,6 +89,7 @@ class OpenAICompatibleChatConnector:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._model = model
+        self._client = httpx.Client(timeout=30.0)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "OpenAICompatibleChatConnector":
@@ -128,10 +131,9 @@ class OpenAICompatibleChatConnector:
             "Content-Type": "application/json",
         }
         try:
-            with httpx.Client(timeout=30.0) as client:
-                response = client.post(
-                    f"{self._base_url}/chat/completions", json=payload, headers=headers
-                )
+            response = self._client.post(
+                f"{self._base_url}/chat/completions", json=payload, headers=headers
+            )
         except httpx.HTTPError as error:
             raise ChatProviderError("chat provider could not be reached") from error
         if response.status_code != 200:
@@ -141,4 +143,9 @@ class OpenAICompatibleChatConnector:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
             raise ChatProviderError("chat provider returned an invalid response") from error
-        return str(content).strip().lower() or None
+        return _normalize_intent_token(str(content)) or None
+
+
+def _normalize_intent_token(content: str) -> str:
+    # Lowercase and strip punctuation so "Interested." or "interested\n" match the enum.
+    return re.sub(r"[^a-z_]", "", content.lower())

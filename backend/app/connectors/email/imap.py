@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import html as html_module
 import imaplib
+import logging
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.header import decode_header, make_header
@@ -12,6 +14,8 @@ from email.policy import default
 from email.utils import parseaddr, parsedate_to_datetime
 
 from app.shared.config import Settings
+
+logger = logging.getLogger(__name__)
 
 
 class ImapConfigurationError(ValueError):
@@ -24,7 +28,12 @@ class ImapError(RuntimeError):
 
 @dataclass(frozen=True)
 class InboundEmailRecord:
-    """A normalized inbound reply extracted from an IMAP mailbox."""
+    """A normalized inbound reply extracted from an IMAP mailbox.
+
+    ``body_text`` is PLAIN TEXT ONLY: HTML parts are stripped to text and entities are
+    unescaped. Consumers (including the frontend) must render it as text, never as HTML —
+    a reply could otherwise smuggle literal ``<script>`` into the page.
+    """
 
     provider_message_id: str
     thread_id: str
@@ -85,7 +94,7 @@ class ImapConnector:
     def list_since_uid(self, mailbox: str = "INBOX", since_uid: int = 0) -> list[InboundEmailRecord]:
         """Return normalized messages whose IMAP UID is greater than ``since_uid``."""
         try:
-            with self._connect() as imap:
+            with self._connected() as imap:
                 self._login(imap)
                 self._select(imap, mailbox)
                 uids = self._search_uids(imap, since_uid)
@@ -103,7 +112,7 @@ class ImapConnector:
     def latest_uid(self, mailbox: str = "INBOX") -> int | None:
         """Return the highest IMAP UID currently present, or ``None`` when empty."""
         try:
-            with self._connect() as imap:
+            with self._connected() as imap:
                 self._login(imap)
                 self._select(imap, mailbox)
                 uids = self._search_uids(imap, 0)
@@ -116,7 +125,7 @@ class ImapConnector:
     def uidvalidity(self, mailbox: str = "INBOX") -> int | None:
         """Return the mailbox UIDVALIDITY token, or ``None`` when unavailable."""
         try:
-            with self._connect() as imap:
+            with self._connected() as imap:
                 self._login(imap)
                 return self._select(imap, mailbox)
         except ImapError:
@@ -124,13 +133,27 @@ class ImapConnector:
         except (OSError, imaplib.IMAP4.error) as error:
             raise ImapError("IMAP mailbox could not be read") from error
 
+    @contextmanager
+    def _connected(self):
+        imap = self._connect()
+        try:
+            yield imap
+        finally:
+            try:
+                imap.logout()
+            except (OSError, imaplib.IMAP4.error):
+                pass
+
     def _connect(self) -> imaplib.IMAP4 | imaplib.IMAP4_SSL:
         if self.ssl:
             return imaplib.IMAP4_SSL(self.host, self.port, timeout=30)
         return imaplib.IMAP4(self.host, self.port, timeout=30)
 
     def _login(self, imap: imaplib.IMAP4) -> None:
-        status, _ = imap.login(self.username, self.password)
+        try:
+            status, _ = imap.login(self.username, self.password)
+        except (OSError, imaplib.IMAP4.error) as error:
+            raise ImapError("IMAP login failed") from error
         if status != "OK":
             raise ImapError("IMAP login failed")
 
@@ -151,28 +174,54 @@ class ImapConnector:
     def _fetch_record(self, imap: imaplib.IMAP4, uid: int) -> InboundEmailRecord | None:
         status, data = imap.uid("fetch", str(uid), "(RFC822)")
         if status != "OK":
+            # Transient fetch failure: log it so it is visible; the message stays below
+            # the next high-water mark and is retried on a subsequent poll.
+            logger.warning("IMAP fetch failed for UID %s", uid)
             return None
         raw = _first_message_bytes(data)
         if raw is None:
+            logger.warning("IMAP fetch returned no message bytes for UID %s", uid)
             return None
-        try:
-            message = BytesParser(policy=default).parsebytes(raw)
-        except Exception:
-            return None
-        sender_name, sender_email = parseaddr(message.get("From") or "")
-        provider_message_id = _header(message, "Message-ID")
-        thread_id = _thread_id(message, provider_message_id)
-        received_at = parsedate_to_datetime(message.get("Date") or "") or datetime.now(timezone.utc)
-        return InboundEmailRecord(
-            provider_message_id=provider_message_id,
-            thread_id=thread_id,
-            sender_email=sender_email.strip().lower(),
-            sender_name=sender_name.strip(),
-            subject=_decoded_header(message.get("Subject") or ""),
-            body_text=_extract_body(message),
-            received_at=received_at,
-            attachments_count=_count_attachments(message),
-        )
+        return parse_rfc822(raw)
+
+
+def parse_rfc822(raw: bytes) -> InboundEmailRecord | None:
+    """Parse raw RFC822 bytes into a normalized record (pure helper, no IMAP server)."""
+    try:
+        message = BytesParser(policy=default).parsebytes(raw)
+    except Exception:
+        return None
+    sender_name, sender_email = parseaddr(message.get("From") or "")
+    provider_message_id = _header(message, "Message-ID")
+    thread_id = _thread_id(message, provider_message_id)
+    received_at = _normalize_received_at(
+        _parse_date(message.get("Date") or "") or datetime.now(timezone.utc)
+    )
+    return InboundEmailRecord(
+        provider_message_id=provider_message_id,
+        thread_id=thread_id,
+        sender_email=sender_email.strip().lower(),
+        sender_name=sender_name.strip(),
+        subject=_decoded_header(message.get("Subject") or ""),
+        body_text=_extract_body(message),
+        received_at=received_at,
+        attachments_count=_count_attachments(message),
+    )
+
+
+def _parse_date(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_received_at(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _first_message_bytes(data: list[bytes | tuple[bytes, bytes]] | None) -> bytes | None:
@@ -251,6 +300,9 @@ def _decode_payload(payload: bytes, charset: str) -> str:
 
 
 def _html_to_text(text: str) -> str:
+    # Convert block-level HTML to newlines and strip the remaining tags. The result is
+    # plain text; after unescape it can still contain literal "<script>" from the source,
+    # so it must NEVER be rendered as HTML downstream.
     text = _BLOCK_TAG_RE.sub("\n", text)
     text = _HTML_TAG_RE.sub(" ", text)
     return html_module.unescape(text)
