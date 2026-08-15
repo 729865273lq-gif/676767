@@ -407,7 +407,7 @@ Commit: `git add backend frontend database && git commit -m "feat: add evidence-
 - Create: `frontend/app/(app)/settings/knowledge/page.tsx`, `frontend/components/knowledge/document-table.tsx`
 - Modify: `database/alembic/versions/0004_knowledge.py`
 
-- [ ] **Step 1: Write failing retrieval-isolation test**
+- [x] **Step 1: Write failing retrieval-isolation test**
 
 ```python
 # backend/tests/knowledge/test_retrieval.py
@@ -416,23 +416,23 @@ def test_retrieval_returns_only_the_selected_organization_chunks(retriever, orga
     assert {chunk.organization_id for chunk in results} == {organizations["acme"].id}
 ```
 
-- [ ] **Step 2: Verify the test fails**
+- [x] **Step 2: Verify the test fails**
 
 Run: `cd backend && uv run pytest tests/knowledge/test_retrieval.py -q`
 
 Expected: FAIL because the retriever is missing.
 
-- [ ] **Step 3: Implement ingestion and retrieval**
+- [x] **Step 3: Implement ingestion and retrieval**
 
 Store source files in an organization-prefixed object path. Create `KnowledgeDocument` and `KnowledgeChunk` records with ingestion status `uploaded`, `processing`, `ready`, or `failed`. Extract PDF/DOCX/XLSX text with explicit parser adapters, chunk by token count with overlap, generate embeddings through the LLM connector, and query pgvector with `organization_id` and optional `product_line_id` filters. Preserve document ID, page/sheet, and excerpt for citations.
 
-- [ ] **Step 4: Verify retrieval, authorization, and migration**
+- [x] **Step 4: Verify retrieval, authorization, and migration**
 
 Run: `cd backend && uv run pytest tests/knowledge -q && uv run alembic upgrade head`
 
 Expected: all tests pass.
 
-- [ ] **Step 5: Implement knowledge UI and commit**
+- [x] **Step 5: Implement knowledge UI and commit**
 
 Allow administrators to upload a document, view parsing/embedding status, product-line association, and failure message. Members may search/use ready knowledge but may not upload or configure sources.
 
