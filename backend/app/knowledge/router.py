@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.connectors.llm import EmbeddingConfigurationError, OpenAICompatibleEmbeddingConnector
@@ -132,7 +132,7 @@ async def search_documents(
     organization_id: str,
     query: str,
     request: Request,
-    limit: int = 5,
+    limit: int = Query(default=5, ge=1, le=50),
     product_line_id: str | None = None,
     principal: SignedPrincipal = Depends(current_principal),
     session: Session = Depends(get_session),

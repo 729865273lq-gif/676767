@@ -18,11 +18,3 @@ class KnowledgeService:
                 .order_by(KnowledgeDocument.created_at.desc())
             )
         )
-
-    def get_document(self, document_id: str, organization_id: str) -> KnowledgeDocument | None:
-        return self.session.scalar(
-            select(KnowledgeDocument).where(
-                KnowledgeDocument.id == document_id,
-                KnowledgeDocument.organization_id == organization_id,
-            )
-        )

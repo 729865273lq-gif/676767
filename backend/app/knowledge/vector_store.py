@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.knowledge.models import KnowledgeDocumentStatus
+
 # Embedding dimension produced by the configured embedding model. The pgvector
 # column in the ``knowledge_vectors`` table is declared with this dimension.
 EMBEDDING_DIM = 1024
@@ -77,6 +79,11 @@ class PgVectorStore:
         self._session = session
 
     async def upsert(self, record: VectorChunk) -> None:
+        if len(record.embedding) != EMBEDDING_DIM:
+            raise ValueError(
+                f"embedding dimension mismatch: got {len(record.embedding)}, expected {EMBEDDING_DIM}; "
+                "verify EMBEDDING_MODEL matches the knowledge_vectors column dimension"
+            )
         self._session.execute(
             text(
                 """
@@ -102,27 +109,32 @@ class PgVectorStore:
         limit: int = 5,
         product_line_id: str | None = None,
     ) -> list[VectorMatch]:
+        params: dict[str, object] = {
+            "query": _vector_literal(query_embedding),
+            "organization_id": organization_id,
+            "ready_status": KnowledgeDocumentStatus.READY.name,
+            "limit": limit,
+        }
+        product_line_clause = ""
+        if product_line_id is not None:
+            product_line_clause = "AND document.product_line_id = :product_line_id"
+            params["product_line_id"] = product_line_id
         rows = self._session.execute(
             text(
-                """
+                f"""
                 SELECT vector.chunk_id, chunk.document_id,
                        1 - (vector.embedding <=> CAST(:query AS vector)) AS similarity
                 FROM knowledge_vectors vector
                 JOIN knowledge_chunks chunk ON chunk.id = vector.chunk_id
                 JOIN knowledge_documents document ON document.id = chunk.document_id
                 WHERE document.organization_id = :organization_id
-                  AND document.status = 'ready'
-                  AND (:product_line_id IS NULL OR document.product_line_id = :product_line_id)
+                  AND document.status = :ready_status
+                  {product_line_clause}
                 ORDER BY vector.embedding <=> CAST(:query AS vector)
                 LIMIT :limit
                 """
             ),
-            {
-                "query": _vector_literal(query_embedding),
-                "organization_id": organization_id,
-                "product_line_id": product_line_id,
-                "limit": limit,
-            },
+            params,
         )
         return [
             VectorMatch(chunk_id=row.chunk_id, document_id=row.document_id, similarity=row.similarity)
