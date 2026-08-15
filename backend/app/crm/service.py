@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.agents.base.contracts import OutboundMessage, SearchResult
 from app.connectors.contact_discovery import DiscoveredContact
 from app.connectors.email_verification import EmailVerificationResult
-from app.crm.email_quality import evaluate_draft, quality_gate_error
+from app.crm.email_quality import QualityReport, evaluate_draft, quality_gate_error
 from app.crm.models import (
     CRMContact,
     EmailDraft,
@@ -1015,6 +1015,33 @@ class LeadService:
             raise LookupError("email draft not found")
         return draft
 
+    def get_email_draft_for_update(self, draft_id: str, organization_id: str) -> EmailDraft:
+        draft = self.session.scalar(
+            select(EmailDraft)
+            .where(
+                EmailDraft.id == draft_id,
+                EmailDraft.organization_id == organization_id,
+            )
+            .with_for_update()
+        )
+        if draft is None:
+            raise LookupError("email draft not found")
+        return draft
+
+    def evaluate_email_draft_quality(self, draft: EmailDraft) -> QualityReport:
+        product_line = self.session.scalar(
+            select(ProductLine).where(ProductLine.id == draft.product_line_id)
+        )
+        lead = self.session.scalar(select(Lead).where(Lead.id == draft.lead_id))
+        contact = self.session.scalar(select(CRMContact).where(CRMContact.id == draft.contact_id))
+        return evaluate_draft(
+            subject=draft.subject,
+            body=draft.body,
+            evidence=draft.evidence_snapshot,
+            product_context=email_product_context(product_line),
+            contact_context=email_contact_context(lead, contact),
+        )
+
     def update_email_draft(
         self,
         *,
@@ -1085,11 +1112,7 @@ class LeadService:
         if draft.status != EmailDraftStatus.PENDING_APPROVAL:
             raise ValueError("only pending drafts can be reviewed")
         if action == "approve":
-            report = evaluate_draft(
-                subject=draft.subject,
-                body=draft.body,
-                evidence=draft.evidence_snapshot,
-            )
+            report = self.evaluate_email_draft_quality(draft)
             if not report.passed:
                 raise quality_gate_error(report)
             draft.status = EmailDraftStatus.READY_TO_SEND
@@ -1170,6 +1193,23 @@ class LeadService:
         if contact is None:
             raise LookupError("contact not found")
         return contact
+
+
+def email_product_context(product_line: ProductLine | None) -> str:
+    if product_line is None:
+        return ""
+    return " ".join(
+        [product_line.name, product_line.description, *(product_line.product_keywords or [])]
+    )
+
+
+def email_contact_context(lead: Lead | None, contact: CRMContact | None) -> str:
+    parts: list[str] = []
+    if contact is not None and contact.name.strip():
+        parts.append(contact.name.strip())
+    if lead is not None and lead.company_name.strip():
+        parts.append(lead.company_name.strip())
+    return " ".join(parts)
 
 
 def canonical_domain(url: str) -> str:

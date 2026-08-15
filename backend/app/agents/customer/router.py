@@ -47,7 +47,7 @@ from app.connectors.search import (
     SearchConnector,
     TomTomSearchConnector,
 )
-from app.crm.email_quality import evaluate_draft, quality_report_dict
+from app.crm.email_quality import QualityGateFailedError, quality_issues_list, quality_report_dict
 from app.crm.models import (
     CRMContact,
     EmailDraft,
@@ -608,13 +608,7 @@ def email_draft_response(draft: EmailDraft, session: Session) -> EmailDraftRespo
         send_blocked=bool(send_assessment["blocked"]),
         send_risk_level=str(send_assessment["level"]),
         send_risk_message=str(send_assessment["message"]),
-        quality=quality_report_dict(
-            evaluate_draft(
-                subject=draft.subject,
-                body=draft.body,
-                evidence=draft.evidence_snapshot,
-            )
-        ),
+        quality=quality_report_dict(LeadService(session).evaluate_email_draft_quality(draft)),
     )
 
 
@@ -1699,6 +1693,12 @@ def review_email_draft(
     except LookupError as error:
         session.rollback()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    except QualityGateFailedError as error:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=quality_issues_list(error.report),
+        ) from error
     except ValueError as error:
         session.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -1716,7 +1716,7 @@ def mark_email_draft_sent(
     try:
         OrganizationService(session).require_membership(principal.user_id, organization_id)
         service = LeadService(session)
-        draft = service.get_email_draft(draft_id, organization_id)
+        draft = service.get_email_draft_for_update(draft_id, organization_id)
         if draft.status == EmailDraftStatus.SENT:
             return email_draft_response(draft, session)
         draft, outbound_message = service.email_draft_outbound_message(

@@ -1639,8 +1639,61 @@ def test_review_approve_rejects_generic_draft_with_repair_codes() -> None:
         "missing_personalization",
     }
     assert approved.status_code == 409
-    assert "missing_product_evidence" in approved.json()["detail"]
-    assert "missing_personalization" in approved.json()["detail"]
+    detail = approved.json()["detail"]
+    assert isinstance(detail, list)
+    codes = {issue["code"] for issue in detail}
+    assert {"missing_product_evidence", "missing_personalization"} <= codes
+    assert all("suggestion" in issue for issue in detail)
+
+
+def test_resend_short_circuits_when_draft_already_sent() -> None:
+    client, factory = configured_client()
+    lead_id, contact_id = _seed_email_draft_lead(
+        client,
+        factory,
+        company_name="Idempotent Send GmbH",
+        contact_name="Buyer",
+        email="buyer@idempotent-send.example",
+        run_key="idempotent-send-route-run",
+    )
+
+    draft = client.post(
+        f"/discovery/organizations/{client.acme_id}/leads/{lead_id}/email-drafts",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={"contact_id": contact_id},
+    )
+    draft_id = draft.json()["id"]
+    client.patch(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{draft_id}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+        json={
+            "subject": "Dimmable LED drivers for your lighting range",
+            "body": (
+                "Dear Buyer, your lighting fixtures match our dimmable LED drivers. "
+                "Would a 15-minute call next week be useful?"
+            ),
+        },
+    )
+    client.post(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{draft_id}/review",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.admin_id),  # type: ignore[attr-defined]
+        json={"action": "approve"},
+    )
+    first_send = client.post(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{draft_id}/send",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+    second_send = client.post(
+        f"/discovery/organizations/{client.acme_id}/email-drafts/{draft_id}/send",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert first_send.status_code == 200
+    assert first_send.json()["status"] == EmailDraftStatus.SENT
+    assert second_send.status_code == 200
+    assert second_send.json()["status"] == EmailDraftStatus.SENT
+    assert second_send.json()["provider_message_id"] == first_send.json()["provider_message_id"]
+    assert len(client.email_connector.sent_messages) == 1  # type: ignore[attr-defined]
 
 
 def test_reply_follow_up_marks_customer_interested() -> None:

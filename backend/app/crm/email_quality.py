@@ -20,12 +20,21 @@ class QualityReport:
     customer_evidence: list[str]
 
 
+class QualityGateFailedError(ValueError):
+    """Raised when a draft fails the pre-review quality gate."""
+
+    def __init__(self, report: QualityReport):
+        self.report = report
+        super().__init__(", ".join(issue.code for issue in report.issues))
+
+
 DEFAULT_MIN_LENGTH = 30
 DEFAULT_MAX_LENGTH = 8_000
 
-# Concrete product nouns that count as "cited product context". The generic words
-# "product(s)"/"goods" are deliberately excluded so a vague pitch does not pass.
-_PRODUCT_SIGNAL_RE = re.compile(
+# Weak fallback only: a small set of common product nouns. A draft whose product
+# line is outside this list must instead cite its own product line via the
+# ``product_context`` argument or a product evidence signal — never this list alone.
+_GENERIC_PRODUCT_SIGNAL_RE = re.compile(
     r"\b(led|leds|driver|drivers|bearing|bearings|lighting|machinery|hardware"
     r"|fixture|fixtures|dimmable|component|components|module|modules|sensor|sensors"
     r"|valve|valves|motor|motors|pump|pumps|inverter|inverters|generator|generators"
@@ -39,7 +48,11 @@ _GREETING_PERSONALIZATION_RE = re.compile(
 )
 
 _YOUR_REFERENCE_RE = re.compile(r"\byour\s+[A-Za-z][A-Za-z0-9'\-]*", re.IGNORECASE)
-_YOUR_REFERENCE_STOPWORDS = {"next", "recent", "kind", "attention", "reply", "response", "time"}
+_YOUR_REFERENCE_STOPWORDS = {
+    "next", "recent", "kind", "attention", "reply", "response", "time",
+    "payment", "order", "email", "message", "request", "inquiry", "interest",
+    "feedback", "opinion", "thoughts", "consideration", "reference",
+}
 
 _CTA_IMPERATIVE_RE = re.compile(
     r"\b(please\s+reply|please\s+let\s+me\s+know|let\s+me\s+know|reply|respond"
@@ -76,6 +89,34 @@ _GENERIC_SALUTATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# signal_name semantics: markers that identify an evidence item's kind when the
+# signal name is informative. Uninformative source descriptors (search_result,
+# manual_entry, public_website) fall back to the source_excerpt text.
+_PRODUCT_SIGNAL_MARKERS = (
+    "product", "supplier", "factory", "manufacturer", "catalog", "sku", "material",
+)
+_CUSTOMER_SIGNAL_MARKERS = ("customer", "company", "lead", "contact", "buyer", "account")
+
+# Text markers used when a signal_name is uninformative or evidence is a bare string.
+# Customer markers are checked first: lead evidence describes the customer, so
+# "lighting importer" is customer context, not product context.
+_CUSTOMER_TEXT_MARKERS = (
+    "company", "customer", "client", "buyer", "distributor", "importer", "wholesaler",
+    "retailer", "merchant", "trader", "founded", "established", "成立", "公司", "ltd",
+    "gmbh", "inc", "corp", "group", "co.",
+)
+_PRODUCT_TEXT_MARKERS = (
+    "supplier", "factory", "manufacturer", "manufacturing", "oem", "odm",
+    "datasheet", "specification", "catalog", "sku", "component",
+)
+
+_TOKEN_STOPWORDS = {
+    "a", "an", "the", "and", "or", "for", "with", "from", "our", "your", "their",
+    "this", "that", "these", "those", "are", "was", "were", "is", "be", "to", "of",
+    "in", "on", "at", "by", "as", "it", "we", "you", "they", "he", "she", "them",
+    "us", "into", "per", "via", "supply", "supplies", "supplying", "products", "product",
+}
+
 
 def evaluate_draft(
     subject: str,
@@ -83,17 +124,23 @@ def evaluate_draft(
     evidence: Sequence[str | Mapping[str, str]] = (),
     *,
     requested_language: str = "en",
+    product_context: str = "",
+    contact_context: str = "",
     min_length: int = DEFAULT_MIN_LENGTH,
     max_length: int = DEFAULT_MAX_LENGTH,
 ) -> QualityReport:
     subject_text = (subject or "").strip()
     body_text = (body or "").strip()
-    evidence_items = _normalize_evidence(evidence)
-    product_evidence, customer_evidence = _classify_evidence(evidence_items)
+    evidence_entries = _evidence_entries(evidence)
+    product_evidence = [text for kind, text in evidence_entries if kind == "product"]
+    customer_evidence = [text for kind, text in evidence_entries if kind == "customer"]
 
     issues: list[QualityIssue] = []
 
-    if requested_language == "en" and _contains_cjk(subject_text + " " + body_text):
+    # Language detection is limited to CJK vs non-CJK. Latin-script languages
+    # (en/es/fr/de/...) are not distinguished, so a Latin-script body passes
+    # regardless of the requested Latin language until script-aware detection is added.
+    if _contains_cjk(body_text) and not _is_cjk_language(requested_language):
         issues.append(
             QualityIssue(
                 code="language_mismatch",
@@ -120,9 +167,12 @@ def evaluate_draft(
         )
 
     body_cites_product = (
-        _PRODUCT_SIGNAL_RE.search(body_text) is not None or "0-10v" in body_text.lower()
+        _matches_product_context(body_text, product_context)
+        or bool(product_evidence)
+        or _GENERIC_PRODUCT_SIGNAL_RE.search(body_text) is not None
+        or "0-10v" in body_text.lower()
     )
-    if not product_evidence and not body_cites_product:
+    if not body_cites_product:
         issues.append(
             QualityIssue(
                 code="missing_product_evidence",
@@ -132,7 +182,9 @@ def evaluate_draft(
         )
 
     body_personalizes = (
-        _GREETING_PERSONALIZATION_RE.search(body_text) is not None or _your_reference(body_text)
+        _GREETING_PERSONALIZATION_RE.search(body_text) is not None
+        or _your_reference(body_text)
+        or _matches_contact_context(body_text, contact_context)
     )
     if not customer_evidence and not body_personalizes:
         issues.append(
@@ -205,51 +257,113 @@ def evaluate_draft(
     )
 
 
-def quality_gate_error(report: QualityReport) -> ValueError:
-    codes = ", ".join(issue.code for issue in report.issues)
-    suggestions = "; ".join(issue.suggestion for issue in report.issues)
-    return ValueError(f"质量检查未通过: {codes}. {suggestions}")
+def quality_gate_error(report: QualityReport) -> QualityGateFailedError:
+    return QualityGateFailedError(report)
+
+
+def quality_issues_list(report: QualityReport) -> list[dict[str, str]]:
+    return [
+        {"code": issue.code, "message": issue.message, "suggestion": issue.suggestion}
+        for issue in report.issues
+    ]
 
 
 def quality_report_dict(report: QualityReport) -> dict:
     return {
         "passed": report.passed,
-        "issues": [
-            {"code": issue.code, "message": issue.message, "suggestion": issue.suggestion}
-            for issue in report.issues
-        ],
+        "issues": quality_issues_list(report),
         "product_evidence": report.product_evidence,
         "customer_evidence": report.customer_evidence,
     }
 
 
-def _normalize_evidence(evidence: Sequence[str | Mapping[str, str]]) -> list[str]:
-    items: list[str] = []
+def _evidence_entries(evidence: Sequence[str | Mapping[str, str]]) -> list[tuple[str, str]]:
+    entries: list[tuple[str, str]] = []
     for item in evidence:
         if isinstance(item, str):
-            items.append(item)
+            entries.append(_classify_string_evidence(item))
         elif isinstance(item, Mapping):
-            parts = [str(item.get(key, "") or "") for key in ("signal_name", "source_excerpt", "source_url")]
-            items.append(" ".join(part for part in parts if part))
+            entries.append(_classify_mapping_evidence(item))
         else:
-            items.append(str(item))
-    return [item for item in items if item.strip()]
+            entries.append(("neutral", str(item)))
+    return [(kind, text) for kind, text in entries if text.strip()]
 
 
-def _classify_evidence(items: list[str]) -> tuple[list[str], list[str]]:
-    product: list[str] = []
-    customer: list[str] = []
-    for text in items:
-        lowered = text.lower()
-        if lowered.startswith("product:") or _PRODUCT_SIGNAL_RE.search(lowered):
-            product.append(text)
-        if lowered.startswith(("company:", "customer:", "client:")):
-            customer.append(text)
-    return product, customer
+def _classify_string_evidence(text: str) -> tuple[str, str]:
+    lowered = text.lower()
+    if lowered.startswith("product:"):
+        return ("product", text)
+    if lowered.startswith(("company:", "customer:", "client:")):
+        return ("customer", text)
+    return (_text_kind(text), text)
+
+
+def _classify_mapping_evidence(item: Mapping[str, str]) -> tuple[str, str]:
+    signal_name = str(item.get("signal_name", "") or "").strip()
+    source_excerpt = str(item.get("source_excerpt", "") or "").strip()
+    source_url = str(item.get("source_url", "") or "").strip()
+    display = source_excerpt or signal_name or source_url
+    if not display:
+        return ("neutral", "")
+
+    kind = _signal_name_kind(signal_name)
+    if kind != "neutral":
+        return (kind, display)
+
+    # Uninformative signal name: fall back to the excerpt text. Lead evidence
+    # defaults to customer context when the text carries no explicit signal.
+    kind = _text_kind(display)
+    if kind == "neutral":
+        return ("customer", display)
+    return (kind, display)
+
+
+def _signal_name_kind(signal_name: str) -> str:
+    lowered = signal_name.lower()
+    if any(marker in lowered for marker in _PRODUCT_SIGNAL_MARKERS):
+        return "product"
+    if any(marker in lowered for marker in _CUSTOMER_SIGNAL_MARKERS):
+        return "customer"
+    return "neutral"
+
+
+def _text_kind(text: str) -> str:
+    lowered = text.lower()
+    if any(marker in lowered for marker in _CUSTOMER_TEXT_MARKERS):
+        return "customer"
+    product_signal = _GENERIC_PRODUCT_SIGNAL_RE.search(lowered) is not None
+    if any(marker in lowered for marker in _PRODUCT_TEXT_MARKERS) or product_signal:
+        return "product"
+    return "neutral"
+
+
+def _matches_product_context(body: str, product_context: str) -> bool:
+    if not product_context:
+        return False
+    body_lower = body.lower()
+    return any(token in body_lower for token in _significant_tokens(product_context))
+
+
+def _matches_contact_context(body: str, contact_context: str) -> bool:
+    if not contact_context:
+        return False
+    body_lower = body.lower()
+    return any(token in body_lower for token in _significant_tokens(contact_context))
+
+
+def _significant_tokens(text: str) -> list[str]:
+    lowered = text.lower()
+    tokens = re.findall(r"[a-z0-9]+(?:-[a-z0-9]+)*|[\u3400-\u9fff]+", lowered)
+    return [token for token in tokens if len(token) >= 2 and token not in _TOKEN_STOPWORDS]
 
 
 def _contains_cjk(value: str) -> bool:
     return any("\u3400" <= character <= "\u9fff" for character in value)
+
+
+def _is_cjk_language(language: str) -> bool:
+    lowered = language.strip().lower()
+    return lowered.startswith("zh") or lowered in {"cn", "chinese"}
 
 
 def _your_reference(body: str) -> bool:

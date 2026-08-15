@@ -128,3 +128,124 @@ def test_quality_gate_flags_unverified_contact_personalization() -> None:
     )
 
     assert "unverified_personalization" in {issue.code for issue in report.issues}
+
+
+def test_real_evidence_snapshot_classifies_lead_evidence_as_customer() -> None:
+    evidence = [
+        {
+            "signal_name": "search_result",
+            "source_excerpt": "Industrial lighting importer and distributor based in Berlin.",
+            "source_url": "https://maps.google.com/?cid=abc",
+        },
+        {
+            "signal_name": "manual_entry",
+            "source_excerpt": "公开证据：公司成立于 1989 年，主营轴承批发。",
+            "source_url": "https://example.com",
+        },
+    ]
+    report = evaluate_draft(
+        subject="Dimmable LED drivers for your retail lighting range",
+        body=(
+            "Your LED retail fixtures match our 0-10V dimmable drivers. "
+            "Would a 15-minute call next week be useful?"
+        ),
+        evidence=evidence,
+    )
+
+    assert report.customer_evidence == [
+        "Industrial lighting importer and distributor based in Berlin.",
+        "公开证据：公司成立于 1989 年，主营轴承批发。",
+    ]
+    assert report.product_evidence == []
+
+
+def test_product_signal_name_classifies_as_product_evidence() -> None:
+    evidence = [
+        {
+            "signal_name": "product_catalog",
+            "source_excerpt": "0-10V dimmable LED driver datasheet",
+            "source_url": "https://catalog.example/driver",
+        },
+    ]
+    report = evaluate_draft(
+        subject="Dimmable LED drivers for your retail lighting range",
+        body=(
+            "Your LED retail fixtures match our 0-10V dimmable drivers. "
+            "Would a 15-minute call next week be useful?"
+        ),
+        evidence=evidence,
+    )
+
+    assert report.product_evidence == ["0-10V dimmable LED driver datasheet"]
+    assert report.customer_evidence == []
+
+
+def test_customer_signal_name_classifies_as_customer_evidence() -> None:
+    evidence = [
+        {
+            "signal_name": "contact_discovery",
+            "source_excerpt": "Anna Weber, Purchasing Manager at Berlin Lighting.",
+            "source_url": "https://linkedin.com/in/anna-weber",
+        },
+    ]
+    report = evaluate_draft(
+        subject="Dimmable LED drivers for your retail lighting range",
+        body=(
+            "Dear Anna Weber, your LED retail fixtures match our 0-10V dimmable drivers. "
+            "Would a 15-minute call next week be useful?"
+        ),
+        evidence=evidence,
+    )
+
+    assert report.customer_evidence == ["Anna Weber, Purchasing Manager at Berlin Lighting."]
+
+
+def test_product_context_satisfies_citation_outside_generic_noun_list() -> None:
+    report = evaluate_draft(
+        subject="Solar panel supply discussion",
+        body=(
+            "We supply monocrystalline solar panels for rooftop installers. "
+            "Would a 15-minute call next week be useful?"
+        ),
+        evidence=["company: Rooftop Solar Installers"],
+        product_context="Solar Panels monocrystalline photovoltaic",
+    )
+
+    assert report.passed is True
+
+
+def test_product_line_outside_generic_nouns_requires_product_context() -> None:
+    report = evaluate_draft(
+        subject="Solar panel supply discussion",
+        body=(
+            "We supply monocrystalline solar panels for rooftop installers. "
+            "Would a 15-minute call next week be useful?"
+        ),
+        evidence=["company: Rooftop Solar Installers"],
+    )
+
+    assert "missing_product_evidence" in {issue.code for issue in report.issues}
+
+
+def test_cjk_requested_language_accepts_cjk_body() -> None:
+    report = evaluate_draft(
+        subject="轴承供应",
+        body="我们供应工业轴承和轴承座，可根据您的采购需求提供规格书和报价。您下周方便安排一次电话沟通吗？",
+        evidence=["product: 轴承", "company: 某客户"],
+        requested_language="zh",
+    )
+
+    assert "language_mismatch" not in {issue.code for issue in report.issues}
+
+
+def test_generic_your_references_do_not_count_as_personalization() -> None:
+    report = evaluate_draft(
+        subject="Supply discussion",
+        body=(
+            "Thank you for your attention. We await your payment confirmation. "
+            "Would a 15-minute call next week be useful?"
+        ),
+        evidence=["product: 0-10V dimmable driver"],
+    )
+
+    assert "missing_personalization" in {issue.code for issue in report.issues}
