@@ -448,7 +448,7 @@ Commit: `git add backend frontend database && git commit -m "feat: add organizat
 - Create: `frontend/app/(app)/email-review/page.tsx`, `frontend/components/email/{draft-editor,quality-report,approval-queue}.tsx`
 - Modify: `database/alembic/versions/0005_email.py`
 
-- [ ] **Step 1: Write the failing email-quality tests**
+- [x] **Step 1: Write the failing email-quality tests**
 
 ```python
 # backend/tests/agents/test_email_quality.py
@@ -470,23 +470,23 @@ def test_quality_gate_accepts_one_value_proposition_and_one_cta_with_citations()
     assert report.passed is True
 ```
 
-- [ ] **Step 2: Verify the quality tests fail**
+- [x] **Step 2: Verify the quality tests fail**
 
 Run: `cd backend && uv run pytest tests/agents/test_email_quality.py -q`
 
 Expected: FAIL because the quality module is missing.
 
-- [ ] **Step 3: Implement the quality report and guarded state transition**
+- [x] **Step 3: Implement the quality report and guarded state transition**
 
 Create `EmailDraft`, `EmailQualityReport`, and `EmailQualityIssue`. A quality report checks requested language, configured length, cited product context, cited customer context, one value proposition, exactly one CTA, unsupported claims, pricing/delivery promises, spam-like phrases, and contact-personalization confidence. `EmailService.submit_for_review` must re-run the report and reject drafts that fail; the API returns issue codes and repair suggestions.
 
-- [ ] **Step 4: Verify the quality gate passes**
+- [x] **Step 4: Verify the quality gate passes**
 
 Run: `cd backend && uv run pytest tests/agents/test_email_quality.py -q`
 
 Expected: `2 passed`.
 
-- [ ] **Step 5: Write a failing approval and idempotent-send test**
+- [x] **Step 5: Write a failing approval and idempotent-send test**
 
 ```python
 # backend/tests/crm/test_email_send.py
@@ -507,11 +507,11 @@ def test_approved_draft_sends_once_for_same_idempotency_key(email_service, appro
     assert len(connector.sent_messages) == 1
 ```
 
-- [ ] **Step 6: Implement approval and sending contract**
+- [x] **Step 6: Implement approval and sending contract**
 
 Define the email connector method `send(message: OutboundMessage, idempotency_key: str) -> ProviderSendResult`. `EmailService.approve` writes actor/time audit data. `send` locks the draft row, verifies `approved`, derives a stable key from draft ID and version, invokes the selected connector once, persists provider message/thread IDs, writes `EmailMessage` and `TimelineEvent`, then marks `sent`. A duplicate request returns the existing send result.
 
-- [ ] **Step 7: Build the approval workbench and test it**
+- [x] **Step 7: Build the approval workbench and test it**
 
 Show batch queue, editable recipient/subject/body/attachment controls, product/customer evidence citations, quality status, repair suggestions, and explicit approve/send actions. Never render “sent” until the API reports a provider result. Add browser tests for failed-quality edit/recheck and unapproved-send rejection.
 
@@ -519,7 +519,7 @@ Run: `cd backend && uv run pytest tests/agents/test_email_quality.py tests/crm/t
 
 Expected: all tests pass.
 
-- [ ] **Step 8: Commit the outreach quality milestone**
+- [x] **Step 8: Commit the outreach quality milestone**
 
 Commit: `git add backend frontend database && git commit -m "feat: add quality-gated email outreach"`
 
