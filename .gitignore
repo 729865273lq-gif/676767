@@ -13,3 +13,4 @@ frontend/.npm-cache/
 frontend/playwright-report/
 frontend/test-results/
 *.log
+backups/

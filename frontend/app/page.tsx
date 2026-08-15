@@ -12,23 +12,41 @@ import {
   createProductItem,
   createProductLine,
   createManualLead,
+  createQuoteDraft,
   deleteContact,
   deleteLead,
+  deleteProductLine,
   deleteProductItem,
+  discoverContacts,
+  discoverContactBatch,
   getLeadDetail,
+  getCustomerDevelopmentConnectors,
+  getEmailDeliveryStatus,
   getPublicProductCatalogUrl,
   listEmailDrafts,
   listFollowUpTasks,
   listFollowUps,
   listLeads,
   listProductLines,
+  listSearchSources,
   listWebsiteInquiries,
   markEmailDraftSent,
+  markQuoteDraftSent,
   reviewEmailDraft,
+  resolveAdministrativeLocation,
   startDiscovery,
   updateEmailDraft,
+  updateDraftContactEmail,
   updateLeadDetail,
+  updateQuoteDraft,
+  updateSearchSource,
+  verifyContactEmail,
   type ContactRecord,
+  type BatchContactDiscoveryItem,
+  type AdministrativeArea,
+  type ConnectorStatus,
+  type DiscoveryRun,
+  type EmailDeliveryStatus,
   type EmailDraft,
   type FollowUpRecord,
   type FollowUpTask,
@@ -38,6 +56,8 @@ import {
   type LeadStatus,
   type ProductItem,
   type ProductLine,
+  type QuoteDraft,
+  type SearchSource,
   type WebsiteInquiry,
   type WebsiteInquiryStatus,
 } from "../lib/api";
@@ -64,7 +84,8 @@ type ActionSignal = {
   note: string;
 };
 
-const navItems = ["总览", "客户搜索 Agent", "CRM", "独立站询盘", "邮件审核", "收件箱", "知识库"];
+const API_STATUS_NAV = "API 接口状态";
+const navItems = ["总览", "客户搜索 Agent", "CRM", "独立站询盘", API_STATUS_NAV, "邮件审核", "收件箱", "知识库"];
 
 const bucketLabel = {
   priority_recommendation: "优先推荐",
@@ -89,6 +110,28 @@ const emailDraftStatusLabel: Record<EmailDraft["status"], string> = {
   rejected: "已驳回",
 };
 
+const sendRiskLabel: Record<EmailDraft["send_risk_level"], string> = {
+  safe: "可发送",
+  caution: "谨慎发送",
+  warning: "建议验证",
+  blocked: "禁止发送",
+};
+
+const blockedContactEmailStatuses = new Set(["invalid", "spamtrap", "abuse", "do_not_mail"]);
+const batchEligibleContactEmailStatuses = new Set(["valid", "catch_all", "accept_all", "unknown"]);
+
+type CustomerBatchResultItem = {
+  leadId: string;
+  companyName: string;
+  status: "success" | "warning" | "error";
+  message: string;
+};
+
+function whatsappLink(value: string): string {
+  if (/^https?:\/\//i.test(value)) return value;
+  return `https://wa.me/${value.replace(/\D/g, "")}`;
+}
+
 const websiteInquiryStatusLabel: Record<WebsiteInquiryStatus, string> = {
   new: "新询盘",
   converted: "已转客户",
@@ -98,6 +141,11 @@ const websiteInquiryStatusLabel: Record<WebsiteInquiryStatus, string> = {
 const followUpTaskStatusLabel: Record<FollowUpTaskStatus, string> = {
   open: "待完成",
   done: "已完成",
+};
+
+const quoteDraftStatusLabel: Record<QuoteDraft["status"], string> = {
+  draft: "草稿",
+  sent: "已发送报价",
 };
 
 const quoteStatusLabel: Record<string, string> = {
@@ -117,8 +165,51 @@ function taskTypeLabel(taskType: string) {
   return "跟进任务";
 }
 
+function quoteDraftPayloadFromForm(form: FormData) {
+  const validUntil = String(form.get("valid_until") ?? "");
+  return {
+    title: String(form.get("title") ?? "").trim(),
+    currency: String(form.get("currency") ?? "USD").trim() || "USD",
+    incoterm: String(form.get("incoterm") ?? "FOB").trim() || "FOB",
+    valid_until: validUntil ? new Date(`${validUntil}T00:00:00Z`).toISOString() : null,
+    line_items: [
+      {
+        item_name: String(form.get("item_name") ?? "").trim(),
+        quantity: Number(form.get("quantity") ?? 0),
+        unit_price: Number(form.get("unit_price") ?? 0),
+        unit: String(form.get("unit") ?? "pcs").trim() || "pcs",
+        notes: String(form.get("line_notes") ?? "").trim(),
+      },
+    ],
+    notes: String(form.get("notes") ?? "").trim(),
+  };
+}
+
 function isCrmLead(lead: Lead) {
   return lead.status !== "new";
+}
+
+const contactDiscoveryLabel: Record<Lead["contact_discovery_status"], string> = {
+  not_scanned: "未提取",
+  has_email: "有邮箱",
+  has_contact: "有人工联系方式",
+  no_contacts: "未发现",
+  needs_review: "待复查",
+};
+
+function sortLeadsNewestFirst(items: Lead[]) {
+  return [...items].sort((left, right) => {
+    const discoveryDifference =
+      Date.parse(right.last_discovered_at) - Date.parse(left.last_discovered_at);
+    if (Number.isFinite(discoveryDifference) && discoveryDifference !== 0) {
+      return discoveryDifference;
+    }
+    const creationDifference = Date.parse(right.created_at) - Date.parse(left.created_at);
+    if (Number.isFinite(creationDifference) && creationDifference !== 0) {
+      return creationDifference;
+    }
+    return 0;
+  });
 }
 
 function parseCsv(value: FormDataEntryValue | null) {
@@ -331,12 +422,16 @@ function ProductLineSetup({
   productLines,
   loading,
   creating,
+  deletingProductLineId,
   onCreate,
+  onDelete,
 }: {
   productLines: ProductLine[];
   loading: boolean;
   creating: boolean;
+  deletingProductLineId: string;
   onCreate: (event: FormEvent<HTMLFormElement>) => void;
+  onDelete: (productLineId: string) => void;
 }) {
   return (
     <section className="productPanel" aria-labelledby="product-lines-title">
@@ -366,6 +461,11 @@ function ProductLineSetup({
             <input name="target_regions" required placeholder="欧洲, 北美" />
           </label>
           <label className="wideField">
+            排除关键词
+            <input name="excluded_keywords" placeholder="同行品牌, manufacturer, factory, jobs" />
+            <small className="fieldHint">命中公司名称、官网或搜索摘要的结果不会进入线索库</small>
+          </label>
+          <label className="wideField">
             产品描述
             <input name="description" placeholder="商业与工业改造照明方案" />
           </label>
@@ -379,13 +479,25 @@ function ProductLineSetup({
           ) : (
             productLines.map((productLine) => (
               <article className="productItem" key={productLine.id}>
-                <strong>{productLine.name}</strong>
-                <span>{productLine.product_keywords.join(", ") || "暂无关键词"}</span>
-                <small>
-                  {productLine.buyer_profiles.join(", ") || "暂无客户类型"} /{" "}
-                  {productLine.target_regions.join(", ") || "暂无目标区域"}
-                </small>
-                <small>{(productLine.product_items ?? []).length} 个产品条目可用于独立站</small>
+                <div>
+                  <strong>{productLine.name}</strong>
+                  <span>{productLine.product_keywords.join(", ") || "暂无关键词"}</span>
+                  <small>
+                    {productLine.buyer_profiles.join(", ") || "暂无客户类型"} /{" "}
+                    {productLine.target_regions.join(", ") || "暂无目标区域"}
+                  </small>
+                  <small>排除：{(productLine.excluded_keywords ?? []).join(", ") || "未配置"}</small>
+                  <small>{(productLine.product_items ?? []).length} 个产品条目可用于独立站</small>
+                </div>
+                <button
+                  className="dangerTextButton"
+                  type="button"
+                  aria-label={`删除产品线 ${productLine.name}`}
+                  disabled={deletingProductLineId === productLine.id}
+                  onClick={() => onDelete(productLine.id)}
+                >
+                  {deletingProductLineId === productLine.id ? "删除中..." : "删除"}
+                </button>
               </article>
             ))
           )}
@@ -531,118 +643,120 @@ function ProductCatalogManager({
   );
 }
 
-function CustomerAgent({
+function leadSourceLabel(lead: Lead) {
+  const sourceUrl = lead.evidence[0]?.source_url.toLowerCase() ?? "";
+  if (sourceUrl.includes("openstreetmap.org")) return "OpenStreetMap";
+  if (sourceUrl.includes("tomtom.com")) return "TomTom";
+  if (sourceUrl.includes("geoapify.com")) return "Geoapify";
+  if (sourceUrl.includes("foursquare.com")) return "Foursquare";
+  return "公开网页";
+}
+
+function DiscoveryWorkbench({
   productLines,
   selectedProductLineId,
   targetMarket,
+  resolvedLocation,
+  locationSubdivisions,
+  resolvingLocation,
+  allowRepeatLocation,
   buyerProfile,
+  excludedKeywords,
+  searchLimit,
   running,
   runMessage,
-  onProductLineChange,
-  onTargetMarketChange,
-  onBuyerProfileChange,
-  onRun,
-}: {
-  productLines: ProductLine[];
-  selectedProductLineId: string;
-  targetMarket: string;
-  buyerProfile: string;
-  running: boolean;
-  runMessage: string;
-  onProductLineChange: (value: string) => void;
-  onTargetMarketChange: (value: string) => void;
-  onBuyerProfileChange: (value: string) => void;
-  onRun: (event: FormEvent<HTMLFormElement>) => void;
-}) {
-  const selectedProductLine = productLines.find((item) => item.id === selectedProductLineId);
-  const buyerProfiles = selectedProductLine?.buyer_profiles ?? [];
-
-  return (
-    <section className="agentPanel" aria-labelledby="customer-agent-title">
-      <div className="agentIntro">
-        <p className="sectionLabel">Agent 01</p>
-        <h2 id="customer-agent-title">客户搜索 Agent</h2>
-        <p>按产品、国家和客户类型搜索公司，保留公开证据并给出优先级评分。</p>
-        <div className="agentChecks" aria-label="搜索检查项">
-          <span>网站已核验</span><span>业务证据</span><span>联系线索</span>
-        </div>
-      </div>
-      <form className="agentForm" onSubmit={onRun}>
-        <label>
-          产品线
-          <select
-            aria-label="搜索产品线"
-            name="product_line_id"
-            required
-            value={selectedProductLineId}
-            onChange={(event) => onProductLineChange(event.target.value)}
-          >
-            <option value="">选择产品线</option>
-            {productLines.map((productLine) => (
-              <option key={productLine.id} value={productLine.id}>{productLine.name}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          目标市场
-          <input
-            aria-label="搜索目标市场"
-            name="target_market"
-            required
-            value={targetMarket}
-            onChange={(event) => onTargetMarketChange(event.target.value)}
-          />
-        </label>
-        <label>
-          客户类型
-          <select
-            aria-label="搜索客户类型"
-            name="buyer_profile"
-            value={buyerProfile}
-            onChange={(event) => onBuyerProfileChange(event.target.value)}
-          >
-            <option value="">不限客户类型</option>
-            {buyerProfiles.map((profile) => (
-              <option key={profile} value={profile}>{profile}</option>
-            ))}
-          </select>
-        </label>
-        <button className="primaryButton" type="submit" disabled={running || !selectedProductLineId}>
-          {running ? "正在生成客户列表..." : "开始搜索客户"}
-        </button>
-        <div className={`runStatus ${runMessage.includes("完成") ? "runComplete" : ""}`} aria-live="polite">
-          <span className="statusDot" aria-hidden="true" />
-          {runMessage}
-        </div>
-      </form>
-    </section>
-  );
-}
-
-function LeadTable({
+  sources,
+  loadingSources,
+  updatingSourceId,
   leads,
+  showingLatestSearch,
+  deletingLeadId,
   priorityOnly,
   selectedLeadIds,
   savingToCrm,
+  runningDailyContactDiscovery,
+  contactDiscoveryProgress,
+  contactDiscoveryItems,
+  discoveryRun,
+  onProductLineChange,
+  onTargetMarketChange,
+  onResolveLocation,
+  onSelectLocation,
+  onAllowRepeatLocationChange,
+  onBuyerProfileChange,
+  onExcludedKeywordsChange,
+  onSearchLimitChange,
+  onSourceToggle,
+  onRun,
   onPriorityToggle,
+  onShowAllLeads,
+  onDelete,
   onSelectLead,
   onSelectAllVisible,
   onSaveToCrm,
   onOpenDetail,
+  onDiscoverDailyContacts,
+  onRetryContactDiscovery,
 }: {
+  productLines: ProductLine[];
+  selectedProductLineId: string;
+  targetMarket: string;
+  resolvedLocation: AdministrativeArea | null;
+  locationSubdivisions: AdministrativeArea[];
+  resolvingLocation: boolean;
+  allowRepeatLocation: boolean;
+  buyerProfile: string;
+  excludedKeywords: string;
+  searchLimit: number;
+  running: boolean;
+  runMessage: string;
+  sources: SearchSource[];
+  loadingSources: boolean;
+  updatingSourceId: string;
   leads: Lead[];
+  showingLatestSearch: boolean;
+  deletingLeadId: string;
   priorityOnly: boolean;
   selectedLeadIds: string[];
   savingToCrm: boolean;
+  runningDailyContactDiscovery: boolean;
+  contactDiscoveryProgress: { completed: number; total: number } | null;
+  contactDiscoveryItems: BatchContactDiscoveryItem[];
+  discoveryRun: DiscoveryRun | null;
+  onProductLineChange: (value: string) => void;
+  onTargetMarketChange: (value: string) => void;
+  onResolveLocation: () => void;
+  onSelectLocation: (area: AdministrativeArea) => void;
+  onAllowRepeatLocationChange: (value: boolean) => void;
+  onBuyerProfileChange: (value: string) => void;
+  onExcludedKeywordsChange: (value: string) => void;
+  onSearchLimitChange: (value: number) => void;
+  onSourceToggle: (sourceId: string, enabled: boolean) => void;
+  onRun: (event: FormEvent<HTMLFormElement>) => void;
   onPriorityToggle: () => void;
+  onShowAllLeads: () => void;
+  onDelete: (leadId: string) => void;
   onSelectLead: (leadId: string, selected: boolean) => void;
   onSelectAllVisible: (leadIds: string[], selected: boolean) => void;
   onSaveToCrm: () => void;
   onOpenDetail: (leadId: string) => void;
+  onDiscoverDailyContacts: () => void;
+  onRetryContactDiscovery: () => void;
 }) {
-  const displayedLeads = priorityOnly
+  const [contactStatusFilter, setContactStatusFilter] = useState<Lead["contact_discovery_status"] | "all">("all");
+  const [lastAutomaticLocationQuery, setLastAutomaticLocationQuery] = useState("");
+  const selectedProductLine = productLines.find((item) => item.id === selectedProductLineId);
+  const buyerProfiles = selectedProductLine?.buyer_profiles ?? [];
+  const enabledSources = sources.filter((source) => source.enabled);
+  const readySources = enabledSources.filter((source) => source.configured || source.status === "ready");
+  const bucketFilteredLeads = priorityOnly
     ? leads.filter((lead) => lead.bucket === "priority_recommendation")
     : leads;
+  const displayedLeads = contactStatusFilter === "all"
+    ? bucketFilteredLeads
+    : bucketFilteredLeads.filter(
+        (lead) => (lead.contact_discovery_status ?? "not_scanned") === contactStatusFilter
+      );
   const selectableLeadIds = displayedLeads
     .filter((lead) => !isCrmLead(lead))
     .map((lead) => lead.id);
@@ -650,61 +764,288 @@ function LeadTable({
   const allVisibleSelected =
     selectableLeadIds.length > 0 && selectedVisibleIds.length === selectableLeadIds.length;
 
+  useEffect(() => {
+    const query = targetMarket.trim();
+    if (!query || query === lastAutomaticLocationQuery || resolvedLocation || resolvingLocation) return;
+    const timer = window.setTimeout(() => {
+      setLastAutomaticLocationQuery(query);
+      onResolveLocation();
+    }, 800);
+    return () => window.clearTimeout(timer);
+  }, [lastAutomaticLocationQuery, onResolveLocation, resolvedLocation, resolvingLocation, targetMarket]);
+
   return (
-    <section className="dataSection" aria-labelledby="lead-results-title">
-      <div className="sectionHeader">
+    <section className="discoveryWorkbench" aria-labelledby="customer-agent-title">
+      <header className="discoveryHeader">
         <div>
-          <p className="sectionLabel">客户搜索 Agent 输出</p>
-          <h2 id="lead-results-title">已发现公司</h2>
+          <p className="sectionLabel">客户搜索</p>
+          <h2 id="customer-agent-title">地图客户搜索工作台</h2>
+          <p>按产品、地区和客户类型运行多来源搜索，筛选后直接进入联系方式补全或 CRM。</p>
         </div>
-        <div className="tableActions">
-          <button className="textButton" type="button" onClick={onPriorityToggle}>
-            {priorityOnly ? "显示全部线索" : "只看优先客户"}
-          </button>
-          <button
-            className="outlineButton"
-            type="button"
-            disabled={savingToCrm || selectedLeadIds.length === 0}
-            onClick={onSaveToCrm}
-          >
-            {savingToCrm
-              ? "保存中..."
-              : selectedLeadIds.length > 0
-                ? `保存 ${selectedLeadIds.length} 个到 CRM`
-                : "保存到 CRM"}
-          </button>
+        <div className="sourceSummary" aria-label="搜索源概况">
+          <strong>{readySources.length}</strong>
+          <span>个来源可运行</span>
         </div>
-      </div>
-      <div className="tableWrap">
-        {leads.length === 0 ? (
-          <div className="emptyState tableEmpty">运行客户搜索后，这里会显示带证据的客户线索。</div>
-        ) : (
-          <table>
-            <thead>
-              <tr>
-                <th scope="col" className="selectColumn">
-                  <input
-                    type="checkbox"
-                    aria-label="选择全部未入库线索"
-                    checked={allVisibleSelected}
-                    disabled={selectableLeadIds.length === 0}
-                    onChange={(event) => onSelectAllVisible(selectableLeadIds, event.currentTarget.checked)}
-                  />
-                </th>
-                <th scope="col">公司</th>
-                <th scope="col">市场 / 客户类型</th>
-                <th scope="col">证据</th>
-                <th scope="col">评分原因</th>
-                <th scope="col">分数</th>
-                <th scope="col">分组</th>
-                <th scope="col">CRM 状态</th>
-                <th scope="col">操作</th>
-              </tr>
-            </thead>
-            <tbody>
+      </header>
+      <div className="discoveryBody">
+        <aside className="discoveryControls" aria-label="客户搜索条件">
+          <form className="discoveryForm" onSubmit={onRun}>
+            <label>
+              产品线
+              <select
+                aria-label="搜索产品线"
+                name="product_line_id"
+                required
+                value={selectedProductLineId}
+                onChange={(event) => onProductLineChange(event.target.value)}
+              >
+                <option value="">选择产品线</option>
+                {productLines.map((productLine) => (
+                  <option key={productLine.id} value={productLine.id}>{productLine.name}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              国家 / 行政区
+              <span className="locationLookup">
+                <input
+                  aria-label="搜索目标市场"
+                  name="target_market"
+                  required
+                  placeholder="输入国家、省、州或城市，例如：北京"
+                  value={targetMarket}
+                  onChange={(event) => onTargetMarketChange(event.target.value)}
+                />
+                <button className="outlineButton" type="button" disabled={resolvingLocation || !targetMarket.trim()} onClick={onResolveLocation}>
+                  {resolvingLocation ? "识别中" : "识别行政区"}
+                </button>
+              </span>
+            </label>
+            {resolvedLocation && (
+              <section className="administrativeAreaPanel" aria-label="行政区选择">
+                <div className="administrativeAreaCurrent">
+                  <span>当前搜索范围</span>
+                  <strong>{resolvedLocation.name}</strong>
+                  <small>{resolvedLocation.formatted}</small>
+                  {resolvedLocation.search_count > 0 && <em>已搜索 {resolvedLocation.search_count} 次</em>}
+                </div>
+                {locationSubdivisions.length > 0 ? (
+                  <div className="administrativeAreaList">
+                    <span>选择下级行政区，减少遗漏和重复</span>
+                    <div>
+                      {locationSubdivisions.map((area) => (
+                        <button
+                          className={area.search_count > 0 ? "areaOption areaSearched" : "areaOption"}
+                          type="button"
+                          key={area.scope_id}
+                          onClick={() => onSelectLocation(area)}
+                          title={area.search_count > 0 ? `已搜索 ${area.search_count} 次，点击查看或继续下钻` : "选择该行政区"}
+                        >
+                          <span>{area.name}</span>
+                          <small>{area.search_count > 0 ? `已搜索 ${area.search_count} 次` : "未搜索"}</small>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <small className="fieldHint">没有找到更小的行政区，可以直接搜索当前范围。</small>
+                )}
+                {resolvedLocation.search_count > 0 && (
+                  <label className="repeatLocationToggle">
+                    <input type="checkbox" checked={allowRepeatLocation} onChange={(event) => onAllowRepeatLocationChange(event.target.checked)} />
+                    允许重新搜索这个已覆盖区域
+                  </label>
+                )}
+              </section>
+            )}
+            <label>
+              客户类型
+              <select
+                aria-label="搜索客户类型"
+                name="buyer_profile"
+                value={buyerProfile}
+                onChange={(event) => onBuyerProfileChange(event.target.value)}
+              >
+                <option value="">不限客户类型</option>
+                {buyerProfiles.map((profile) => (
+                  <option key={profile} value={profile}>{profile}</option>
+                ))}
+              </select>
+            </label>
+            <label>
+              结果数量
+              <select
+                aria-label="搜索结果数量"
+                value={searchLimit}
+                onChange={(event) => onSearchLimitChange(Number(event.target.value))}
+              >
+                <option value={20}>20 家（快速）</option>
+                <option value={50}>50 家（标准）</option>
+                <option value={100}>100 家（深度）</option>
+                <option value={200}>200 家（批量）</option>
+              </select>
+            </label>
+            <label className="discoveryWideField">
+              排除同行 / 无效结果
+              <input
+                aria-label="搜索排除关键词"
+                placeholder="同行品牌, manufacturer, factory, jobs"
+                value={excludedKeywords}
+                onChange={(event) => onExcludedKeywordsChange(event.target.value)}
+              />
+            </label>
+            <button className="primaryButton discoveryRunButton" type="submit" disabled={running || !selectedProductLineId || !resolvedLocation || (resolvedLocation.search_count > 0 && !allowRepeatLocation) || readySources.length === 0}>
+              {running ? "正在搜索..." : "开始搜索客户"}
+            </button>
+          </form>
+
+          <section className="sourceChooser" aria-labelledby="search-source-title">
+            <div className="sourceChooserHeader">
+              <div>
+                <span>数据来源</span>
+                <h3 id="search-source-title">客户搜索源</h3>
+              </div>
+              <strong>{loadingSources ? "加载中" : `${enabledSources.length}/${sources.length}`}</strong>
+            </div>
+            {loadingSources ? (
+              <div className="emptyState">正在加载搜索来源...</div>
+            ) : (
+              <div className="sourceToggleList">
+                {sources.map((source) => {
+                  const ready = source.configured || source.status === "ready";
+                  return (
+                    <label className="connectorItem sourceToggle" key={source.source_id}>
+                      <input
+                        type="checkbox"
+                        checked={source.enabled}
+                        disabled={updatingSourceId === source.source_id}
+                        onChange={(event) => onSourceToggle(source.source_id, event.currentTarget.checked)}
+                      />
+                      <span className="sourceIdentity">
+                        <strong>{source.label}</strong>
+                        <small>{source.provider}</small>
+                      </span>
+                      <span className={ready ? "sourceState sourceReady" : "sourceState sourceNeedsConfig"}>
+                        {source.enabled ? (ready ? "已启用" : "已启用 · 待配置") : "已停用"}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </aside>
+
+        <div className="discoveryResults" aria-labelledby="lead-results-title">
+          <div className="resultsToolbar">
+            <div>
+              <p className="sectionLabel">{showingLatestSearch ? "本次搜索结果" : "全部搜索记录"}</p>
+              <h2 id="lead-results-title">{showingLatestSearch ? "本次发现公司" : "已发现公司"}</h2>
+            </div>
+            <div className="resultFilters" aria-label="客户结果筛选">
+              <button className={priorityOnly ? "segmentButton" : "segmentButton active"} type="button" onClick={priorityOnly ? onPriorityToggle : undefined}>全部</button>
+              <button className={priorityOnly ? "segmentButton active" : "segmentButton"} type="button" onClick={priorityOnly ? undefined : onPriorityToggle}>优先客户</button>
+              <select aria-label="联系方式状态筛选" value={contactStatusFilter} onChange={(event) => setContactStatusFilter(event.currentTarget.value as Lead["contact_discovery_status"] | "all")}>
+                <option value="all">全部联系方式状态</option>
+                <option value="has_email">有邮箱</option>
+                <option value="has_contact">有人工联系方式</option>
+                <option value="needs_review">待复查</option>
+                <option value="no_contacts">未发现</option>
+                <option value="not_scanned">未提取</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="selectionBar">
+            <label>
+              <input
+                type="checkbox"
+                aria-label="选择全部未入库线索"
+                checked={allVisibleSelected}
+                disabled={selectableLeadIds.length === 0}
+                onChange={(event) => onSelectAllVisible(selectableLeadIds, event.currentTarget.checked)}
+              />
+              选择当前 {selectableLeadIds.length} 家
+            </label>
+            <span>{displayedLeads.length} 家公司</span>
+            {showingLatestSearch && <button className="textButton" type="button" onClick={onShowAllLeads}>查看历史线索</button>}
+            <button className="outlineButton" type="button" disabled={savingToCrm || selectedLeadIds.length === 0} onClick={onSaveToCrm}>
+              {savingToCrm ? "保存中..." : selectedLeadIds.length > 0 ? `保存 ${selectedLeadIds.length} 个到 CRM` : "保存到 CRM"}
+            </button>
+          </div>
+
+          <div className="dailyContactBar" aria-label="今日线索联系方式提取">
+            <div>
+              <strong>批量提取客户联系方式</strong>
+              <span>优先处理已勾选客户，否则处理当前搜索结果；只保存公开联系方式，不会发送邮件</span>
+            </div>
+            <button className="outlineButton" type="button" disabled={runningDailyContactDiscovery} onClick={onDiscoverDailyContacts}>
+              {runningDailyContactDiscovery
+                ? `正在提取 ${contactDiscoveryProgress?.completed ?? 0}/${contactDiscoveryProgress?.total ?? 0}`
+                : selectedLeadIds.length > 0
+                  ? `提取已选 ${selectedLeadIds.length} 家`
+                  : `提取当前 ${leads.length} 家`}
+            </button>
+          </div>
+          {contactDiscoveryProgress && (
+            <div className="contactProgress" aria-label="联系方式提取进度" aria-live="polite">
+              <progress value={contactDiscoveryProgress.completed} max={contactDiscoveryProgress.total} />
+              <span>{contactDiscoveryProgress.completed} / {contactDiscoveryProgress.total} 家</span>
+            </div>
+          )}
+          {contactDiscoveryItems.length > 0 && (
+            <div className="dailyContactResult" aria-live="polite">
+              <div className="dailyContactSummary">
+                <strong>本次联系方式提取</strong>
+                <span>有邮箱 {contactDiscoveryItems.filter((item) => item.status === "has_email").length} 家</span>
+                <span>有人工联系方式 {contactDiscoveryItems.filter((item) => item.status === "has_contact").length} 家</span>
+                <span>待复查 {contactDiscoveryItems.filter((item) => item.status === "needs_review").length} 家</span>
+                <button className="textButton" type="button" disabled={runningDailyContactDiscovery || !contactDiscoveryItems.some((item) => item.status === "needs_review")} onClick={onRetryContactDiscovery}>
+                  重试待复查
+                </button>
+              </div>
+              <details className="dailyContactDetails">
+                <summary>查看逐家公司联系方式</summary>
+                <div>
+                  {contactDiscoveryItems.map((item) => (
+                    <article key={item.lead_id}>
+                      <span className={`dailyContactState dailyContactState-${item.status}`}>{contactDiscoveryLabel[item.status]}</span>
+                      <strong>{item.company_name}</strong>
+                      <small>邮箱 {item.email_count}（已基础检查 {item.checked_email_count}） / 电话 {item.phone_count} / 社媒 {item.social_count} · {item.message}</small>
+                      <button className="textButton" type="button" onClick={() => onOpenDetail(item.lead_id)}>查看客户</button>
+                    </article>
+                  ))}
+                </div>
+              </details>
+            </div>
+          )}
+          <div className={`runStatus workbenchRunStatus ${runMessage.includes("完成") ? "runComplete" : ""}`} aria-live="polite">
+            <span className="statusDot" aria-hidden="true" />
+            {runMessage}
+          </div>
+          {discoveryRun && (discoveryRun.queries?.length ?? 0) > 0 && (
+            <details className="dailyContactDetails discoveryQueryDetails">
+              <summary>查看本次 {discoveryRun.query_count ?? discoveryRun.queries?.length ?? 1} 组搜索词</summary>
+              <div>
+                {(discoveryRun.queries ?? []).map((query, index) => (
+                  <article key={`${index}-${query}`}>
+                    <span className="sourceTag">查询 {index + 1}</span>
+                    <strong>{query}</strong>
+                  </article>
+                ))}
+              </div>
+            </details>
+          )}
+
+          {leads.length === 0 ? (
+            <div className="emptyState resultEmpty">暂无客户结果。设置左侧条件并启动搜索。</div>
+          ) : displayedLeads.length === 0 ? (
+            <div className="emptyState resultEmpty">本批结果中没有优先客户，请切换到“全部”。</div>
+          ) : (
+            <div className="leadResultList" aria-label="客户搜索结果列表">
               {displayedLeads.map((lead) => (
-                <tr key={lead.id}>
-                  <td className="selectColumn">
+                <article className="leadResultRow" key={lead.id}>
+                  <label className="leadSelect">
                     <input
                       type="checkbox"
                       aria-label={`选择 ${lead.company_name}`}
@@ -712,28 +1053,40 @@ function LeadTable({
                       disabled={isCrmLead(lead)}
                       onChange={(event) => onSelectLead(lead.id, event.currentTarget.checked)}
                     />
-                  </td>
-                  <td><strong>{lead.company_name}</strong><span>{lead.website}</span></td>
-                  <td><strong className="contactName">{lead.target_market}</strong><span>{lead.buyer_profile ?? "不限类型"}</span></td>
-                  <td className="evidence">
-                    {lead.evidence.length > 0 ? lead.evidence[0].source_excerpt : "暂无来源摘要"}
-                  </td>
-                  <td className="evidence">
-                    {lead.reasons.join("; ") || lead.missing_signals.join("; ") || "暂无评分细节"}
-                  </td>
-                  <td><span className={scoreClass(lead.score)}>{lead.score}</span></td>
-                  <td><span className={bucketClass(lead.bucket)}>{bucketLabel[lead.bucket]}</span></td>
-                  <td><span className={isCrmLead(lead) ? "status statusQualified" : "status statusNew"}>{leadStatusLabel[lead.status]}</span></td>
-                  <td>
-                    <button className="textButton" type="button" onClick={() => onOpenDetail(lead.id)}>
-                      查看详情
-                    </button>
-                  </td>
-                </tr>
+                  </label>
+                  <div className="leadResultMain">
+                    <div className="leadTitleRow">
+                      <div>
+                        <strong>{lead.company_name}</strong>
+                        <span>{lead.target_market} / {lead.buyer_profile ?? "不限类型"}</span>
+                      </div>
+                      <div className="leadMarks">
+                        <span className={scoreClass(lead.score)}>{lead.score}</span>
+                        <span className={bucketClass(lead.bucket)}>{bucketLabel[lead.bucket]}</span>
+                        <span className={`contactState contactState-${lead.contact_discovery_status ?? "not_scanned"}`}>
+                          {contactDiscoveryLabel[lead.contact_discovery_status ?? "not_scanned"]}
+                          {(lead.contact_email_count ?? 0) > 0 ? ` ${lead.contact_email_count}` : ""}
+                        </span>
+                        {isCrmLead(lead) && <span className="status statusQualified">已入 CRM</span>}
+                      </div>
+                    </div>
+                    <div className="leadEvidence">
+                      <span className="sourceTag">{leadSourceLabel(lead)}</span>
+                      <p>{lead.evidence[0]?.source_excerpt || lead.reasons[0] || "暂无来源摘要"}</p>
+                    </div>
+                    <div className="leadResultActions">
+                      {lead.website ? <a href={lead.website} target="_blank" rel="noreferrer">打开官网</a> : <span>暂无官网</span>}
+                      <button className="textButton" type="button" onClick={() => onOpenDetail(lead.id)}>查看并提取联系方式</button>
+                      <button className="dangerTextButton" type="button" disabled={deletingLeadId === lead.id} onClick={() => onDelete(lead.id)}>
+                        {deletingLeadId === lead.id ? "删除中..." : "删除"}
+                      </button>
+                    </div>
+                  </div>
+                </article>
               ))}
-            </tbody>
-          </table>
-        )}
+            </div>
+          )}
+        </div>
       </div>
     </section>
   );
@@ -743,20 +1096,34 @@ function CRMCustomerManager({
   leads,
   productLines,
   selectedProductLineId,
+  selectedCrmLeadIds,
   creating,
   deletingLeadId,
+  runningBatch,
+  batchMessage,
+  batchResults,
   onCreate,
   onDelete,
   onOpenDetail,
+  onSelectLead,
+  onSelectAllVisible,
+  onRunBatch,
 }: {
   leads: Lead[];
   productLines: ProductLine[];
   selectedProductLineId: string;
+  selectedCrmLeadIds: string[];
   creating: boolean;
   deletingLeadId: string;
+  runningBatch: boolean;
+  batchMessage: string;
+  batchResults: CustomerBatchResultItem[];
   onCreate: (event: FormEvent<HTMLFormElement>) => void;
   onDelete: (leadId: string) => void;
   onOpenDetail: (leadId: string) => void;
+  onSelectLead: (leadId: string, selected: boolean) => void;
+  onSelectAllVisible: (leadIds: string[], selected: boolean) => void;
+  onRunBatch: () => void;
 }) {
   const [crmSearch, setCrmSearch] = useState("");
   const [crmStatusFilter, setCrmStatusFilter] = useState<LeadStatus | "all">("all");
@@ -774,6 +1141,9 @@ function CRMCustomerManager({
       ].some((value) => value.toLowerCase().includes(normalizedSearch));
     return matchesStatus && matchesSearch;
   });
+  const visibleLeadIds = crmLeads.map((lead) => lead.id);
+  const selectedVisibleIds = visibleLeadIds.filter((leadId) => selectedCrmLeadIds.includes(leadId));
+  const allVisibleSelected = visibleLeadIds.length > 0 && selectedVisibleIds.length === visibleLeadIds.length;
 
   return (
     <section className="crmPanel" aria-labelledby="crm-customers-title">
@@ -849,6 +1219,37 @@ function CRMCustomerManager({
               </select>
             </label>
           </div>
+          <div className="batchBar" aria-label="批量客户开发" aria-live="polite">
+            <label className="checkboxField">
+              <input
+                type="checkbox"
+                aria-label="选择当前筛选的 CRM 客户"
+                checked={allVisibleSelected}
+                disabled={visibleLeadIds.length === 0 || runningBatch}
+                onChange={(event) => onSelectAllVisible(visibleLeadIds, event.currentTarget.checked)}
+              />
+              选择当前筛选客户
+            </label>
+            <button
+              className="outlineButton"
+              type="button"
+              disabled={runningBatch || selectedCrmLeadIds.length === 0}
+              onClick={onRunBatch}
+            >
+              {runningBatch ? "批量处理中..." : `批量开发 ${selectedCrmLeadIds.length} 个客户`}
+            </button>
+            <span>{batchMessage || "批量流程：查邮箱、验证邮箱、为可发送联系人生成开发信草稿"}</span>
+          </div>
+          {batchResults.length > 0 ? (
+            <div className="batchResults" aria-label="批量开发处理结果">
+              {batchResults.map((item) => (
+                <div className={`batchResultItem ${item.status}`} key={item.leadId}>
+                  <strong>{item.companyName}</strong>
+                  <span>{item.message}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
           {crmLeads.length === 0 ? (
             <div className="emptyState">
               {allCrmLeads.length === 0
@@ -858,6 +1259,13 @@ function CRMCustomerManager({
           ) : (
             crmLeads.map((lead) => (
               <article className="crmItem" key={lead.id}>
+                <input
+                  type="checkbox"
+                  aria-label={`选择 CRM 客户 ${lead.company_name}`}
+                  checked={selectedCrmLeadIds.includes(lead.id)}
+                  disabled={runningBatch}
+                  onChange={(event) => onSelectLead(lead.id, event.currentTarget.checked)}
+                />
                 <div>
                   <strong>{lead.company_name}</strong>
                   <span>{lead.website}</span>
@@ -1034,11 +1442,13 @@ function WebsiteInquiryPanel({
 function ReviewQueue({
   drafts,
   loading,
+  emailDeliveryStatus,
   onOpen,
   onOpenDraft,
 }: {
   drafts: EmailDraft[];
   loading: boolean;
+  emailDeliveryStatus: EmailDeliveryStatus | null;
   onOpen: () => void;
   onOpenDraft: (draftId: string) => void;
 }) {
@@ -1070,7 +1480,186 @@ function ReviewQueue({
       )}
       <div className="reviewFooter"><span>人工审批已启用</span><strong>{pendingCount} 封草稿待审</strong></div>
       <div className="reviewFooter"><span>待发送箱</span><strong>{readyCount} 封邮件待人工发送</strong></div>
+      <div className="reviewFooter">
+        <span>发件邮箱</span>
+        <strong>
+          {emailDeliveryStatus?.configured
+            ? `${emailDeliveryStatus.from_name} / ${emailDeliveryStatus.from_email}`
+            : "未配置 SMTP，暂不能真实发送"}
+        </strong>
+      </div>
     </section>
+  );
+}
+
+function ConnectorStatusPanel({
+  connectors,
+  loading,
+}: {
+  connectors: ConnectorStatus[];
+  loading: boolean;
+}) {
+  const configuredCount = connectors.filter((connector) => connector.configured).length;
+  return (
+    <section className="timelinePanel" aria-labelledby="connector-title">
+      <div className="sectionHeader compact">
+        <div>
+          <p className="sectionLabel">API 连接</p>
+          <h2 id="connector-title">客户开发 API</h2>
+        </div>
+        <span className="countBadge">
+          {loading ? "检查中" : `${configuredCount}/${connectors.length || 6}`}
+        </span>
+      </div>
+      {loading ? (
+        <div className="emptyState">正在检查客户开发 API 配置...</div>
+      ) : (
+        <div className="connectorList">
+          {connectors.map((connector) => (
+            <div className="connectorItem" key={connector.connector_id}>
+              <div>
+                <strong>{connector.label}</strong>
+                <span>{connector.provider} / {connector.purpose}</span>
+              </div>
+              <span className={connector.configured ? "status statusQualified" : "status statusResearch"}>
+                {connector.configured ? "已配置" : `缺 ${connector.missing.join(", ")}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ApiStatusPage({
+  connectors,
+  sources,
+  loadingConnectors,
+  loadingSources,
+  error,
+  updatingSourceId,
+  onSourceToggle,
+  onRefresh,
+}: {
+  connectors: ConnectorStatus[];
+  sources: SearchSource[];
+  loadingConnectors: boolean;
+  loadingSources: boolean;
+  error: string;
+  updatingSourceId: string;
+  onSourceToggle: (sourceId: string, enabled: boolean) => void;
+  onRefresh: () => void;
+}) {
+  const configuredCount = connectors.filter((connector) => connector.configured).length;
+  const enabledSources = sources.filter((source) => source.enabled);
+  const runnableSources = enabledSources.filter((source) => source.configured || source.status === "ready");
+  const needsConfigCount = sources.filter((source) => source.enabled && !source.configured && source.status !== "ready").length;
+
+  return (
+    <div className="apiStatusPage" aria-label="API 接口状态页面">
+      <section className="pageHeading apiPageHeading">
+        <div>
+          <p className="sectionLabel">系统连接</p>
+          <h1>API 接口状态</h1>
+          <p>集中查看客户搜索、联系方式补全和邮件开发相关接口的启用与配置状态。</p>
+        </div>
+        <button className="outlineButton" type="button" disabled={loadingConnectors || loadingSources} onClick={onRefresh}>
+          {loadingConnectors || loadingSources ? "检查中..." : "重新检查"}
+        </button>
+      </section>
+
+      {error && <div className="errorBanner apiErrorBanner" role="alert">{error}</div>}
+
+      <section className="apiMetricGrid" aria-label="API 状态概览">
+        <div><span>已配置接口</span><strong>{configuredCount}</strong><small>共 {connectors.length} 个客户开发接口</small></div>
+        <div><span>已启用来源</span><strong>{enabledSources.length}</strong><small>共 {sources.length} 个搜索来源</small></div>
+        <div><span>可运行来源</span><strong>{runnableSources.length}</strong><small>启用且配置完整</small></div>
+        <div className={needsConfigCount > 0 ? "metricAttention" : ""}><span>待配置</span><strong>{needsConfigCount}</strong><small>已启用但缺少密钥</small></div>
+      </section>
+
+      <section className="apiStatusSection" aria-labelledby="website-api-status-title">
+        <div className="sectionHeader">
+          <div>
+            <p className="sectionLabel">搜索平台</p>
+            <h2 id="website-api-status-title">网站 API 接口链接状态</h2>
+          </div>
+          <span className="countBadge">{loadingSources ? "检查中" : `${runnableSources.length}/${sources.length} 可运行`}</span>
+        </div>
+        {loadingSources ? (
+          <div className="emptyState apiStatusEmpty">正在检查搜索平台接口...</div>
+        ) : sources.length === 0 ? (
+          <div className="emptyState apiStatusEmpty">未获取到接口目录。请确认后端 API 服务已启动，然后点击“重新检查”。</div>
+        ) : (
+          <div className="apiSourceList" aria-label="网站 API 接口列表">
+            <div className="apiSourceHeader" aria-hidden="true">
+              <span>平台 / 用途</span><span>接口地址</span><span>启用</span><span>配置</span><span>运行状态</span>
+            </div>
+            {sources.map((source) => {
+              const ready = source.configured || source.status === "ready";
+              const runnable = source.enabled && ready;
+              return (
+                <article className="apiSourceRow" key={source.source_id}>
+                  <div className="apiSourceName">
+                    <strong>{source.label}</strong>
+                    <span>{source.provider}</span>
+                    <small>{source.purpose}</small>
+                  </div>
+                  <a href={source.base_url} target="_blank" rel="noreferrer">打开平台</a>
+                  <label className="switchField apiSourceSwitch">
+                    <input
+                      type="checkbox"
+                      checked={source.enabled}
+                      disabled={updatingSourceId === source.source_id}
+                      onChange={(event) => onSourceToggle(source.source_id, event.currentTarget.checked)}
+                    />
+                    <span>{source.enabled ? "已启用" : "已停用"}</span>
+                  </label>
+                  <span className={ready ? "apiState apiStateReady" : "apiState apiStateWarning"}>
+                    {ready ? "已配置" : "缺少配置"}
+                  </span>
+                  <span className={runnable ? "apiState apiStateReady" : "apiState apiStateMuted"}>
+                    {runnable ? "可运行" : source.enabled ? "等待配置" : "未运行"}
+                  </span>
+                  {!ready && source.missing.length > 0 && <small className="apiMissing">缺少：{source.missing.join(", ")}</small>}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      <section className="apiStatusSection" aria-labelledby="development-api-title">
+        <div className="sectionHeader">
+          <div>
+            <p className="sectionLabel">功能接口</p>
+            <h2 id="development-api-title">客户开发 API</h2>
+          </div>
+          <span className="countBadge">{loadingConnectors ? "检查中" : `${configuredCount}/${connectors.length} 已配置`}</span>
+        </div>
+        {loadingConnectors ? (
+          <div className="emptyState apiStatusEmpty">正在检查客户开发 API...</div>
+        ) : connectors.length === 0 ? (
+          <div className="emptyState apiStatusEmpty">未获取到客户开发 API 状态。请检查后端连接后重新加载。</div>
+        ) : (
+          <div className="developmentApiGrid" aria-label="客户开发 API 列表">
+            {connectors.map((connector) => (
+              <article key={connector.connector_id}>
+                <div>
+                  <strong>{connector.label}</strong>
+                  <span>{connector.provider}</span>
+                  <small>{connector.purpose}</small>
+                </div>
+                <span className={connector.configured ? "apiState apiStateReady" : "apiState apiStateWarning"}>
+                  {connector.configured ? "已配置" : "待配置"}
+                </span>
+                {!connector.configured && connector.missing.length > 0 && <small className="apiMissing">缺少：{connector.missing.join(", ")}</small>}
+              </article>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -1210,13 +1799,81 @@ function FollowUpTaskBoard({
   );
 }
 
+function sendRiskClass(level: EmailDraft["send_risk_level"]) {
+  if (level === "safe") return "sendRisk sendRiskSafe";
+  if (level === "blocked") return "sendRisk sendRiskBlocked";
+  if (level === "caution") return "sendRisk sendRiskCaution";
+  return "sendRisk sendRiskWarning";
+}
+
+function draftVerificationSummary(draft: EmailDraft) {
+  const status = draft.contact_email_verification_status;
+  if (!status) return "邮箱验证：未验证";
+  const provider = draft.contact_email_verification_provider || "验证服务";
+  const subStatus = draft.contact_email_verification_sub_status
+    ? ` / ${draft.contact_email_verification_sub_status}`
+    : "";
+  return `邮箱验证：${provider} / ${status}${subStatus}`;
+}
+
+function normalizeContactEmailStatus(contact: ContactRecord) {
+  return contact.email_verification_status.trim().toLowerCase().replaceAll("-", "_");
+}
+
+function contactEmailIsBlocked(contact: ContactRecord) {
+  return blockedContactEmailStatuses.has(normalizeContactEmailStatus(contact));
+}
+
+function contactIsBatchEligible(contact: ContactRecord) {
+  return Boolean(contact.email.trim()) && !contactEmailIsBlocked(contact);
+}
+
+function chooseBatchContact(contacts: ContactRecord[], existingDrafts: EmailDraft[]) {
+  const draftedContactIds = new Set(
+    existingDrafts
+      .filter((draft) => draft.status !== "rejected")
+      .map((draft) => draft.contact_id)
+  );
+  return contacts
+    .filter((contact) => contactIsBatchEligible(contact) && !draftedContactIds.has(contact.id))
+    .sort((a, b) => {
+      const verificationRank = (contact: ContactRecord) =>
+        batchEligibleContactEmailStatuses.has(normalizeContactEmailStatus(contact)) ? 1 : 0;
+      return verificationRank(b) - verificationRank(a) || Number(b.is_primary) - Number(a.is_primary);
+    })[0] ?? null;
+}
+
+function contactHasManualChannel(contact: ContactRecord) {
+  return Boolean(
+    contact.phone.trim() ||
+    contact.linkedin_url.trim() ||
+    contact.whatsapp.trim() ||
+    contact.social_profiles.length
+  );
+}
+
+function batchFailureMessage(caught: unknown) {
+  const message = caught instanceof Error ? caught.message : "未知错误";
+  if (message.includes("could not reach the site")) return "官网当前无法访问";
+  if (message.includes("did not return HTML")) return "官网未返回可提取的网页内容";
+  if (message.includes("HTTP ")) return `官网拒绝访问（${message.match(/HTTP \d+/)?.[0] ?? "HTTP 错误"}）`;
+  if (message.includes("public contact discovery failed")) return "官网联系方式提取失败";
+  if (message.includes("host could not be resolved")) return "官网域名无法解析";
+  if (message.includes("non-public address")) return "官网地址被安全策略拦截";
+  return message;
+}
+
 function ReviewDrawer({
   open,
   draft,
   saving,
+  savingRecipient,
+  verifyingRecipient,
   reviewing,
   onClose,
   onSave,
+  onSaveRecipient,
+  onVerifyRecipient,
   onApprove,
   onMarkSent,
   onReject,
@@ -1224,9 +1881,13 @@ function ReviewDrawer({
   open: boolean;
   draft: EmailDraft | null;
   saving: boolean;
+  savingRecipient: boolean;
+  verifyingRecipient: boolean;
   reviewing: boolean;
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
+  onSaveRecipient: (event: FormEvent<HTMLFormElement>) => void;
+  onVerifyRecipient: () => void;
   onApprove: () => void;
   onMarkSent: () => void;
   onReject: (event: FormEvent<HTMLFormElement>) => void;
@@ -1251,6 +1912,10 @@ function ReviewDrawer({
               </span>
               <h3>{draft.lead_company_name}</h3>
               <p>To: {draft.contact_name} / {draft.contact_email}</p>
+              <div className={sendRiskClass(draft.send_risk_level)}>
+                <strong>{sendRiskLabel[draft.send_risk_level]}</strong>
+                <span>{draft.send_risk_message}</span>
+              </div>
               <div className="draftEvidence">
                 {draft.evidence_snapshot.length === 0 ? (
                   <span>暂无证据快照</span>
@@ -1259,6 +1924,39 @@ function ReviewDrawer({
                 )}
               </div>
             </article>
+            <form className="recipientEditForm" onSubmit={onSaveRecipient} key={`recipient-${draft.id}-${draft.current_contact_email}-${draft.contact_email}`}>
+              <label>
+                客户邮箱地址
+                <input
+                  name="contact_email"
+                  type="email"
+                  required
+                  defaultValue={draft.current_contact_email || draft.contact_email}
+                  disabled={draft.status === "ready_to_send"}
+                />
+              </label>
+              <div className="recipientMeta">
+                <span>{draftVerificationSummary(draft)}</span>
+                {draft.contact_source_url ? (
+                  <a href={draft.contact_source_url} target="_blank" rel="noreferrer">查看邮箱来源页</a>
+                ) : (
+                  <span>未记录邮箱来源页</span>
+                )}
+              </div>
+              <div className="recipientActions">
+                <button className="outlineButton" type="submit" disabled={savingRecipient || draft.status === "ready_to_send"}>
+                  {savingRecipient ? "保存中..." : "保存邮箱"}
+                </button>
+                <button className="outlineButton" type="button" disabled={verifyingRecipient || draft.status === "ready_to_send"} onClick={onVerifyRecipient}>
+                  {verifyingRecipient ? "验证中..." : "验证当前邮箱"}
+                </button>
+              </div>
+              <small>
+                {draft.status === "sent"
+                  ? `本封邮件已发送到 ${draft.contact_email}；这里修改的是客户当前邮箱，供后续开发使用。`
+                  : "修改邮箱后会自动清除旧验证结果，请重新验证后再批准发送。"}
+              </small>
+            </form>
             <form className="draftEditForm" onSubmit={onSave} key={`draft-${draft.id}`}>
               <label>
                 邮件主题
@@ -1275,8 +1973,8 @@ function ReviewDrawer({
                 <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "pending_approval"} onClick={onApprove}>
                   {reviewing ? "审批中..." : "批准为待发送"}
                 </button>
-                <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "ready_to_send"} onClick={onMarkSent}>
-                  {reviewing ? "记录中..." : "标记已发送"}
+                <button className="primaryButton" type="button" disabled={reviewing || draft.status !== "ready_to_send" || draft.send_blocked} onClick={onMarkSent}>
+                  {reviewing ? "发送中..." : "发送开发信"}
                 </button>
               </div>
             </form>
@@ -1326,17 +2024,27 @@ function CustomerDetailDrawer({
   addingContact,
   addingFollowUp,
   addingTask,
+  addingQuoteDraft,
+  discoveringContacts,
   deletingContactId,
+  verifyingContactId,
   generatingDraftContactId,
   completingTaskId,
+  savingQuoteDraftId,
+  sendingQuoteDraftId,
   onClose,
   onSave,
   onAddContact,
+  onDiscoverContacts,
   onDeleteContact,
+  onVerifyContactEmail,
   onCreateEmailDraft,
   onAddFollowUp,
   onAddTask,
   onCompleteTask,
+  onCreateQuoteDraft,
+  onUpdateQuoteDraft,
+  onMarkQuoteDraftSent,
 }: {
   detail: LeadDetail | null;
   loading: boolean;
@@ -1344,20 +2052,31 @@ function CustomerDetailDrawer({
   addingContact: boolean;
   addingFollowUp: boolean;
   addingTask: boolean;
+  addingQuoteDraft: boolean;
+  discoveringContacts: boolean;
   deletingContactId: string;
+  verifyingContactId: string;
   generatingDraftContactId: string;
   completingTaskId: string;
+  savingQuoteDraftId: string;
+  sendingQuoteDraftId: string;
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
   onAddContact: (event: FormEvent<HTMLFormElement>) => void;
+  onDiscoverContacts: () => void;
   onDeleteContact: (contactId: string) => void;
+  onVerifyContactEmail: (contactId: string) => void;
   onCreateEmailDraft: (contactId: string) => void;
   onAddFollowUp: (event: FormEvent<HTMLFormElement>) => void;
   onAddTask: (event: FormEvent<HTMLFormElement>) => void;
   onCompleteTask: (taskId: string) => void;
+  onCreateQuoteDraft: (event: FormEvent<HTMLFormElement>) => void;
+  onUpdateQuoteDraft: (draftId: string, event: FormEvent<HTMLFormElement>) => void;
+  onMarkQuoteDraftSent: (draftId: string) => void;
 }) {
   if (!detail && !loading) return null;
   const followUpTasks = detail?.follow_up_tasks ?? [];
+  const quoteDrafts = detail?.quote_drafts ?? [];
 
   return (
     <div className="drawerBackdrop" role="presentation" onMouseDown={onClose}>
@@ -1412,8 +2131,16 @@ function CustomerDetailDrawer({
 
             <section className="detailBlock">
               <h3>联系人</h3>
+              <button
+                className="outlineButton compactButton"
+                type="button"
+                disabled={discoveringContacts}
+                onClick={onDiscoverContacts}
+              >
+                {discoveringContacts ? "扫描中..." : "扫描公开联系方式"}
+              </button>
               {detail.contacts.length === 0 ? (
-                <p className="mutedCopy">暂无联系人。添加主要联系人后，后续邮件和跟进可以绑定到具体的人。</p>
+                <p className="mutedCopy">暂无联系方式。可录入电话、社交主页或邮箱，后续跟进可以绑定到具体的人或企业。</p>
               ) : (
                 <ul className="contactList">
                   {detail.contacts.map((contact: ContactRecord) => (
@@ -1423,10 +2150,41 @@ function CustomerDetailDrawer({
                         {contact.is_primary && <span className="primaryBadge">主要联系人</span>}
                       </div>
                       <p>{contact.title || "未填写职位"}</p>
-                      <small>{contact.email || "未填写邮箱"} / {contact.phone || "未填写电话"}</small>
-                      {(contact.linkedin_url || contact.whatsapp) && (
-                        <small>{contact.linkedin_url || "未填写 LinkedIn"} / {contact.whatsapp || "未填写 WhatsApp"}</small>
+                      <div className="contactChannels">
+                        {contact.email && <a href={`mailto:${contact.email}`}>邮箱</a>}
+                        {contact.phone && <a href={`tel:${contact.phone}`}>电话</a>}
+                        {contact.whatsapp && (
+                          <a href={whatsappLink(contact.whatsapp)} target="_blank" rel="noreferrer">WhatsApp</a>
+                        )}
+                        {contact.linkedin_url && (
+                          <a href={contact.linkedin_url} target="_blank" rel="noreferrer">LinkedIn</a>
+                        )}
+                        {(contact.social_profiles ?? []).map((profile) => (
+                          <a key={`${profile.platform}-${profile.url}`} href={profile.url} target="_blank" rel="noreferrer">
+                            {profile.platform}
+                          </a>
+                        ))}
+                        {contact.source_url && (
+                          <a href={contact.source_url} target="_blank" rel="noreferrer">来源页</a>
+                        )}
+                      </div>
+                      {contact.email && (
+                        <small className="verificationStatus">
+                          {contact.email_verification_status
+                            ? `邮箱验证：${contact.email_verification_provider || "Provider"} / ${contact.email_verification_status}${
+                                contact.email_verification_sub_status ? ` / ${contact.email_verification_sub_status}` : ""
+                              }`
+                            : "邮箱验证：未验证"}
+                        </small>
                       )}
+                      <button
+                        className="textButton"
+                        type="button"
+                        disabled={!contact.email || verifyingContactId === contact.id}
+                        onClick={() => onVerifyContactEmail(contact.id)}
+                      >
+                        {verifyingContactId === contact.id ? "验证中..." : "验证邮箱"}
+                      </button>
                       <button
                         className="textButton"
                         type="button"
@@ -1475,6 +2233,26 @@ function CustomerDetailDrawer({
                 WhatsApp
                 <input name="whatsapp" placeholder="+49 ..." />
               </label>
+              <label>
+                Facebook
+                <input name="facebook_url" placeholder="https://facebook.com/..." />
+              </label>
+              <label>
+                Instagram
+                <input name="instagram_url" placeholder="https://instagram.com/..." />
+              </label>
+              <label>
+                TikTok
+                <input name="tiktok_url" placeholder="https://tiktok.com/@..." />
+              </label>
+              <label>
+                其他社交主页
+                <input name="other_social_url" placeholder="https://..." />
+              </label>
+              <label className="wideField">
+                联系方式来源页
+                <input name="source_url" placeholder="企业官网联系页、Google 地图或目录页" />
+              </label>
               <label className="checkboxField">
                 <input name="is_primary" type="checkbox" />
                 设为主要联系人
@@ -1498,6 +2276,134 @@ function CustomerDetailDrawer({
                     </li>
                   ))}
                 </ul>
+              )}
+            </section>
+
+            <form className="quoteForm" onSubmit={onCreateQuoteDraft} key={`quote-${detail.id}-${quoteDrafts.length}`}>
+              <h3>新增报价草稿</h3>
+              <label className="wideField">
+                报价标题
+                <input name="title" required maxLength={200} defaultValue={`${detail.company_name} 报价草稿`} />
+              </label>
+              <label>
+                币种
+                <input name="currency" required maxLength={10} defaultValue="USD" />
+              </label>
+              <label>
+                贸易条款
+                <input name="incoterm" required maxLength={20} defaultValue="FOB" />
+              </label>
+              <label>
+                有效期
+                <input name="valid_until" type="date" />
+              </label>
+              <label>
+                产品 / 服务
+                <input name="item_name" required maxLength={200} placeholder="例如：LED floodlight 200W" />
+              </label>
+              <label>
+                数量
+                <input name="quantity" required min="0.01" step="0.01" type="number" placeholder="500" />
+              </label>
+              <label>
+                单价
+                <input name="unit_price" required min="0" step="0.01" type="number" placeholder="12.50" />
+              </label>
+              <label>
+                单位
+                <input name="unit" maxLength={50} defaultValue="pcs" />
+              </label>
+              <label className="wideField">
+                行项目备注
+                <input name="line_notes" maxLength={500} placeholder="例如：Sample batch / Lead time 20 days" />
+              </label>
+              <label className="wideField">
+                报价备注
+                <textarea name="notes" maxLength={2000} placeholder="例如：价格需人工复核，发出前确认包装、交期和付款条款。" />
+              </label>
+              <button className="primaryButton" type="submit" disabled={addingQuoteDraft}>
+                {addingQuoteDraft ? "创建中..." : "创建报价草稿"}
+              </button>
+            </form>
+
+            <section className="detailBlock">
+              <h3>报价草稿</h3>
+              {quoteDrafts.length === 0 ? (
+                <p className="mutedCopy">暂无报价草稿。报价只会保存为草稿或人工标记已发送，不会自动发送给客户。</p>
+              ) : (
+                <div className="quoteDraftList">
+                  {quoteDrafts.map((draft: QuoteDraft) => {
+                    const firstLine = draft.line_items[0];
+                    return (
+                      <form
+                        className="quoteDraftItem"
+                        key={draft.id}
+                        onSubmit={(event) => onUpdateQuoteDraft(draft.id, event)}
+                      >
+                        <div className="quoteDraftHeader">
+                          <div>
+                            <strong>{draft.title}</strong>
+                            <span>{quoteDraftStatusLabel[draft.status]} / {draft.currency} {draft.total_amount.toFixed(2)} / {draft.incoterm}</span>
+                          </div>
+                          <small>{draft.status === "sent" ? `发送：${formatDateTime(draft.sent_at)}` : `更新：${formatDateTime(draft.updated_at)}`}</small>
+                        </div>
+                        <label className="wideField">
+                          报价标题
+                          <input name="title" defaultValue={draft.title} disabled={draft.status !== "draft"} />
+                        </label>
+                        <label>
+                          币种
+                          <input name="currency" defaultValue={draft.currency} disabled={draft.status !== "draft"} />
+                        </label>
+                        <label>
+                          贸易条款
+                          <input name="incoterm" defaultValue={draft.incoterm} disabled={draft.status !== "draft"} />
+                        </label>
+                        <label>
+                          有效期
+                          <input name="valid_until" type="date" defaultValue={draft.valid_until?.slice(0, 10) ?? ""} disabled={draft.status !== "draft"} />
+                        </label>
+                        <label>
+                          产品 / 服务
+                          <input name="item_name" defaultValue={firstLine?.item_name ?? ""} disabled={draft.status !== "draft"} />
+                        </label>
+                        <label>
+                          数量
+                          <input name="quantity" type="number" step="0.01" min="0.01" defaultValue={firstLine?.quantity ?? 1} disabled={draft.status !== "draft"} />
+                        </label>
+                        <label>
+                          单价
+                          <input name="unit_price" type="number" step="0.01" min="0" defaultValue={firstLine?.unit_price ?? 0} disabled={draft.status !== "draft"} />
+                        </label>
+                        <label>
+                          单位
+                          <input name="unit" defaultValue={firstLine?.unit ?? "pcs"} disabled={draft.status !== "draft"} />
+                        </label>
+                        <label className="wideField">
+                          行项目备注
+                          <input name="line_notes" defaultValue={firstLine?.notes ?? ""} disabled={draft.status !== "draft"} />
+                        </label>
+                        <label className="wideField">
+                          报价备注
+                          <textarea name="notes" defaultValue={draft.notes} disabled={draft.status !== "draft"} />
+                        </label>
+                        <div className="drawerActions">
+                          <button className="outlineButton" type="submit" disabled={draft.status !== "draft" || savingQuoteDraftId === draft.id}>
+                            {savingQuoteDraftId === draft.id ? "保存中..." : "保存报价草稿"}
+                          </button>
+                          <button
+                            className="primaryButton"
+                            type="button"
+                            disabled={draft.status !== "draft" || sendingQuoteDraftId === draft.id}
+                            onClick={() => onMarkQuoteDraftSent(draft.id)}
+                          >
+                            {sendingQuoteDraftId === draft.id ? "记录中..." : "标记已发送报价"}
+                          </button>
+                        </div>
+                      </form>
+                    );
+                  })}
+                </div>
               )}
             </section>
 
@@ -1623,16 +2529,33 @@ export default function HomePage() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [loadingProductLines, setLoadingProductLines] = useState(false);
   const [creatingProductLine, setCreatingProductLine] = useState(false);
+  const [deletingProductLineId, setDeletingProductLineId] = useState("");
   const [creatingProductItem, setCreatingProductItem] = useState(false);
   const [deletingProductItemId, setDeletingProductItemId] = useState("");
   const [productLines, setProductLines] = useState<ProductLine[]>([]);
   const [selectedProductLineId, setSelectedProductLineId] = useState("");
-  const [targetMarket, setTargetMarket] = useState("德国");
+  const [targetMarket, setTargetMarket] = useState("");
+  const [resolvedLocation, setResolvedLocation] = useState<AdministrativeArea | null>(null);
+  const [locationSubdivisions, setLocationSubdivisions] = useState<AdministrativeArea[]>([]);
+  const [resolvingLocation, setResolvingLocation] = useState(false);
+  const [allowRepeatLocation, setAllowRepeatLocation] = useState(false);
   const [buyerProfile, setBuyerProfile] = useState("");
+  const [excludedKeywords, setExcludedKeywords] = useState("");
+  const [searchLimit, setSearchLimit] = useState(50);
   const [leads, setLeads] = useState<Lead[]>([]);
+  const sortedLeads = useMemo(() => sortLeadsNewestFirst(leads), [leads]);
   const [running, setRunning] = useState(false);
+  const [runningDailyContactDiscovery, setRunningDailyContactDiscovery] = useState(false);
+  const [contactDiscoveryProgress, setContactDiscoveryProgress] = useState<{ completed: number; total: number } | null>(null);
+  const [contactDiscoveryItems, setContactDiscoveryItems] = useState<BatchContactDiscoveryItem[]>([]);
+  const [lastDiscoveryRun, setLastDiscoveryRun] = useState<DiscoveryRun | null>(null);
   const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  const [latestSearchLeadIds, setLatestSearchLeadIds] = useState<string[] | null>(null);
   const [savingToCrm, setSavingToCrm] = useState(false);
+  const [selectedCrmLeadIds, setSelectedCrmLeadIds] = useState<string[]>([]);
+  const [runningCustomerBatch, setRunningCustomerBatch] = useState(false);
+  const [customerBatchMessage, setCustomerBatchMessage] = useState("");
+  const [customerBatchResults, setCustomerBatchResults] = useState<CustomerBatchResultItem[]>([]);
   const [creatingManualLead, setCreatingManualLead] = useState(false);
   const [deletingLeadId, setDeletingLeadId] = useState("");
   const [selectedLeadId, setSelectedLeadId] = useState("");
@@ -1640,23 +2563,37 @@ export default function HomePage() {
   const [loadingLeadDetail, setLoadingLeadDetail] = useState(false);
   const [savingLeadDetail, setSavingLeadDetail] = useState(false);
   const [addingContact, setAddingContact] = useState(false);
+  const [discoveringContacts, setDiscoveringContacts] = useState(false);
   const [deletingContactId, setDeletingContactId] = useState("");
   const [generatingDraftContactId, setGeneratingDraftContactId] = useState("");
   const [addingFollowUp, setAddingFollowUp] = useState(false);
   const [addingTask, setAddingTask] = useState(false);
   const [completingTaskId, setCompletingTaskId] = useState("");
+  const [addingQuoteDraft, setAddingQuoteDraft] = useState(false);
+  const [savingQuoteDraftId, setSavingQuoteDraftId] = useState("");
+  const [sendingQuoteDraftId, setSendingQuoteDraftId] = useState("");
+  const [verifyingContactId, setVerifyingContactId] = useState("");
   const [followUps, setFollowUps] = useState<FollowUpRecord[]>([]);
   const [loadingFollowUps, setLoadingFollowUps] = useState(false);
   const [followUpTasks, setFollowUpTasks] = useState<FollowUpTask[]>([]);
   const [loadingFollowUpTasks, setLoadingFollowUpTasks] = useState(false);
   const [emailDrafts, setEmailDrafts] = useState<EmailDraft[]>([]);
   const [loadingEmailDrafts, setLoadingEmailDrafts] = useState(false);
+  const [emailDeliveryStatus, setEmailDeliveryStatus] = useState<EmailDeliveryStatus | null>(null);
+  const [customerDevelopmentConnectors, setCustomerDevelopmentConnectors] = useState<ConnectorStatus[]>([]);
+  const [loadingCustomerDevelopmentConnectors, setLoadingCustomerDevelopmentConnectors] = useState(false);
+  const [searchSources, setSearchSources] = useState<SearchSource[]>([]);
+  const [loadingSearchSources, setLoadingSearchSources] = useState(false);
+  const [apiStatusError, setApiStatusError] = useState("");
+  const [updatingSearchSourceId, setUpdatingSearchSourceId] = useState("");
   const [websiteInquiries, setWebsiteInquiries] = useState<WebsiteInquiry[]>([]);
   const [loadingWebsiteInquiries, setLoadingWebsiteInquiries] = useState(false);
   const [inquiryStatusFilter, setInquiryStatusFilter] = useState<WebsiteInquiryStatus | "all">("new");
   const [convertingInquiryId, setConvertingInquiryId] = useState("");
   const [selectedDraftId, setSelectedDraftId] = useState("");
   const [savingEmailDraft, setSavingEmailDraft] = useState(false);
+  const [savingDraftRecipient, setSavingDraftRecipient] = useState(false);
+  const [verifyingDraftRecipient, setVerifyingDraftRecipient] = useState(false);
   const [reviewingEmailDraft, setReviewingEmailDraft] = useState(false);
   const [runMessage, setRunMessage] = useState("请创建或选择产品线后开始搜索");
   const [priorityOnly, setPriorityOnly] = useState(false);
@@ -1695,6 +2632,7 @@ export default function HomePage() {
         if (items.length > 0) {
           setSelectedProductLineId(items[0].id);
           setBuyerProfile(items[0].buyer_profiles[0] ?? "");
+          setExcludedKeywords((items[0].excluded_keywords ?? []).join(", "));
           setRunMessage("已准备好进行定向客户搜索");
         }
       })
@@ -1721,6 +2659,25 @@ export default function HomePage() {
       })
       .catch((caught: unknown) => handleApiFailure(caught, "无法加载邮件审批队列"))
       .finally(() => setLoadingEmailDrafts(false));
+    getEmailDeliveryStatus(currentSession)
+      .then((status) => setEmailDeliveryStatus(status))
+      .catch((caught: unknown) => handleApiFailure(caught, "无法加载发件邮箱状态"));
+    setLoadingCustomerDevelopmentConnectors(true);
+    getCustomerDevelopmentConnectors(currentSession)
+      .then((status) => setCustomerDevelopmentConnectors(status.connectors))
+      .catch((caught: unknown) => {
+        handleApiFailure(caught, "无法加载客户开发 API 状态");
+        setApiStatusError("后端 API 未连接，无法读取接口状态。请确认 8000 端口服务已启动。");
+      })
+      .finally(() => setLoadingCustomerDevelopmentConnectors(false));
+    setLoadingSearchSources(true);
+    listSearchSources(currentSession)
+      .then((response) => setSearchSources(response.sources))
+      .catch((caught: unknown) => {
+        handleApiFailure(caught, "无法加载客户搜索来源");
+        setApiStatusError("后端 API 未连接，无法读取网站接口目录。请确认 8000 端口服务已启动。");
+      })
+      .finally(() => setLoadingSearchSources(false));
     setLoadingWebsiteInquiries(true);
     listWebsiteInquiries(currentSession, "new")
       .then((items) => setWebsiteInquiries(items))
@@ -1735,6 +2692,28 @@ export default function HomePage() {
       return;
     }
     setError(caught instanceof Error ? caught.message : fallback);
+  }
+
+  async function refreshApiStatus() {
+    if (!session) return;
+    setApiStatusError("");
+    setLoadingCustomerDevelopmentConnectors(true);
+    setLoadingSearchSources(true);
+    const [connectorResult, sourceResult] = await Promise.allSettled([
+      getCustomerDevelopmentConnectors(session),
+      listSearchSources(session),
+    ]);
+    if (connectorResult.status === "fulfilled") {
+      setCustomerDevelopmentConnectors(connectorResult.value.connectors);
+    }
+    if (sourceResult.status === "fulfilled") {
+      setSearchSources(sourceResult.value.sources);
+    }
+    if (connectorResult.status === "rejected" || sourceResult.status === "rejected") {
+      setApiStatusError("部分接口状态加载失败。请确认后端 API 的 8000 端口可访问，然后重新检查。");
+    }
+    setLoadingCustomerDevelopmentConnectors(false);
+    setLoadingSearchSources(false);
   }
 
   async function refreshEmailDrafts(nextSelectedDraftId?: string) {
@@ -1799,6 +2778,20 @@ export default function HomePage() {
     void refreshWebsiteInquiries(statusFilter);
   }
 
+  async function toggleSearchSource(sourceId: string, enabled: boolean) {
+    if (!session) return;
+    setUpdatingSearchSourceId(sourceId);
+    setError("");
+    try {
+      const updated = await updateSearchSource(session, sourceId, enabled);
+      setSearchSources((current) => current.map((source) => (source.source_id === updated.source_id ? updated : source)));
+    } catch (caught) {
+      handleApiFailure(caught, "无法更新搜索来源");
+    } finally {
+      setUpdatingSearchSourceId("");
+    }
+  }
+
   async function convertInquiryToCustomer(inquiryId: string) {
     if (!session) return;
     setConvertingInquiryId(inquiryId);
@@ -1842,6 +2835,48 @@ export default function HomePage() {
     setSelectedProductLineId(productLineId);
     const productLine = productLines.find((item) => item.id === productLineId);
     setBuyerProfile(productLine?.buyer_profiles[0] ?? "");
+    setExcludedKeywords((productLine?.excluded_keywords ?? []).join(", "));
+    setResolvedLocation(null);
+    setLocationSubdivisions([]);
+    setAllowRepeatLocation(false);
+  }
+
+  function changeTargetMarket(value: string) {
+    setTargetMarket(value);
+    setResolvedLocation(null);
+    setLocationSubdivisions([]);
+    setAllowRepeatLocation(false);
+  }
+
+  async function resolveLocation(query = targetMarket) {
+    if (!session || !query.trim()) return;
+    setResolvingLocation(true);
+    setError("");
+    try {
+      const result = await resolveAdministrativeLocation(session, query.trim(), selectedProductLineId);
+      setResolvedLocation(result.area);
+      setLocationSubdivisions(result.subdivisions);
+      setTargetMarket(result.area.search_label);
+      setAllowRepeatLocation(false);
+      setRunMessage(
+        result.subdivisions.length > 0
+          ? `已识别 ${result.area.name}，请选择下级行政区后搜索`
+          : `已识别 ${result.area.name}，可以开始搜索`
+      );
+    } catch (caught) {
+      handleApiFailure(caught, "无法识别行政区");
+      setRunMessage("行政区识别失败");
+    } finally {
+      setResolvingLocation(false);
+    }
+  }
+
+  function selectAdministrativeArea(area: AdministrativeArea) {
+    setResolvedLocation(area);
+    setLocationSubdivisions([]);
+    setTargetMarket(area.search_label);
+    setAllowRepeatLocation(false);
+    void resolveLocation(area.search_label);
   }
 
   async function createProductLineFromForm(event: FormEvent<HTMLFormElement>) {
@@ -1857,16 +2892,51 @@ export default function HomePage() {
         product_keywords: parseCsv(form.get("keywords")),
         buyer_profiles: parseCsv(form.get("buyer_profiles")),
         target_regions: parseCsv(form.get("target_regions")),
+        excluded_keywords: parseCsv(form.get("excluded_keywords")),
       });
       setProductLines((current) => [...current, created]);
       setSelectedProductLineId(created.id);
       setBuyerProfile(created.buyer_profiles[0] ?? "");
+      setExcludedKeywords((created.excluded_keywords ?? []).join(", "));
       setRunMessage("已准备好进行定向客户搜索");
       event.currentTarget.reset();
     } catch (caught) {
       handleApiFailure(caught, "无法创建产品线");
     } finally {
       setCreatingProductLine(false);
+    }
+  }
+
+  async function deleteProductLineRecord(productLineId: string) {
+    if (!session) return;
+    const productLine = productLines.find((item) => item.id === productLineId);
+    if (!productLine) return;
+    const confirmed = window.confirm(
+      `确认删除产品线“${productLine.name}”？该产品线下的供应商和产品条目会一起删除。已关联客户的产品线不能直接删除。`
+    );
+    if (!confirmed) return;
+
+    setDeletingProductLineId(productLineId);
+    setError("");
+    try {
+      await deleteProductLine(session, productLineId);
+      const remaining = productLines.filter((item) => item.id !== productLineId);
+      setProductLines(remaining);
+      if (selectedProductLineId === productLineId) {
+        const nextProductLine = remaining[0];
+        setSelectedProductLineId(nextProductLine?.id ?? "");
+        setBuyerProfile(nextProductLine?.buyer_profiles[0] ?? "");
+        setExcludedKeywords((nextProductLine?.excluded_keywords ?? []).join(", "));
+        setRunMessage(nextProductLine ? "已切换到剩余产品线" : "请创建产品线后开始搜索");
+      }
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 409) {
+        setError("该产品线已关联客户，不能直接删除。请先删除相关客户线索。");
+      } else {
+        handleApiFailure(caught, "无法删除产品线");
+      }
+    } finally {
+      setDeletingProductLineId("");
     }
   }
 
@@ -1926,24 +2996,116 @@ export default function HomePage() {
     if (!session || !selectedProductLineId) return;
     setRunning(true);
     setError("");
+    setLastDiscoveryRun(null);
     setRunMessage("客户搜索运行中");
     try {
       const run = await startDiscovery(session, {
         product_line_id: selectedProductLineId,
-        target_market: targetMarket.trim(),
+        target_market: resolvedLocation?.search_label ?? targetMarket.trim(),
+        location_scope_id: resolvedLocation?.scope_id,
+        location_country_code: resolvedLocation?.country_code,
+        allow_repeat_location: allowRepeatLocation,
         buyer_profile: buyerProfile || undefined,
-        limit: 20,
+        excluded_keywords: parseCsv(excludedKeywords),
+        limit: searchLimit,
       });
       const nextLeads = await listLeads(session);
+      setLastDiscoveryRun(run);
       setLeads(nextLeads);
+      const runLeadIds = run.lead_ids ?? nextLeads
+        .filter((lead) => lead.workflow_run_id === run.workflow_run_id)
+        .map((lead) => lead.id);
+      setLatestSearchLeadIds(runLeadIds);
       setSelectedLeadIds([]);
-      setRunMessage(`搜索完成 / 已筛选 ${run.lead_count} 家公司 / ${run.query}`);
+      const failedQueryCount = run.failed_query_count ?? 0;
+      const failedSummary = failedQueryCount > 0 ? ` / ${failedQueryCount} 组查询失败` : "";
+      setRunMessage(
+        `${resolvedLocation?.name ?? targetMarket} 搜索完成 / ${run.query_count ?? 1} 组查询获得 ${run.candidate_count ?? runLeadIds.length} 条候选` +
+        ` / 去重 ${run.duplicate_count ?? 0} 条 / 过滤 ${run.filtered_count ?? 0} 条` +
+        ` / 保存 ${runLeadIds.length} 家客户${failedSummary}`
+      );
+      if (resolvedLocation) {
+        setResolvedLocation({
+          ...resolvedLocation,
+          search_count: resolvedLocation.search_count + 1,
+          last_searched_at: new Date().toISOString(),
+        });
+        setAllowRepeatLocation(false);
+      }
+      requestAnimationFrame(() => {
+        document.getElementById("lead-results-title")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
     } catch (caught) {
       handleApiFailure(caught, "客户搜索失败");
       setRunMessage("客户搜索失败");
     } finally {
       setRunning(false);
     }
+  }
+
+  async function runDailyContactDiscovery(requestedLeadIds?: string[]) {
+    if (!session) return;
+    const leadIds = requestedLeadIds ?? (
+      selectedLeadIds.length > 0
+        ? selectedLeadIds
+        : latestSearchLeadIds?.length
+          ? latestSearchLeadIds
+          : sortedLeads.map((lead) => lead.id)
+    );
+    if (leadIds.length === 0) {
+      setRunMessage("当前没有可提取联系方式的客户");
+      return;
+    }
+    setRunningDailyContactDiscovery(true);
+    setContactDiscoveryItems([]);
+    setContactDiscoveryProgress({ completed: 0, total: leadIds.length });
+    setError("");
+    try {
+      let completed = 0;
+      let collected: BatchContactDiscoveryItem[] = [];
+      for (let index = 0; index < leadIds.length; index += 5) {
+        const batch = leadIds.slice(index, index + 5);
+        const result = await discoverContactBatch(session, batch);
+        completed += batch.length;
+        collected = [...collected, ...result.items];
+        setContactDiscoveryItems(collected);
+        setContactDiscoveryProgress({ completed, total: leadIds.length });
+        const resultById = new Map(result.items.map((item) => [item.lead_id, item]));
+        setLeads((current) => current.map((lead) => {
+          const item = resultById.get(lead.id);
+          return item ? {
+            ...lead,
+            contact_discovery_status: item.status,
+            contact_discovery_message: item.message,
+            contact_discovered_at: new Date().toISOString(),
+            contact_email_count: item.email_count,
+            contact_phone_count: item.phone_count,
+            contact_social_count: item.social_count,
+          } : lead;
+        }));
+      }
+      const emailCount = collected.filter((item) => item.status === "has_email").length;
+      const manualCount = collected.filter((item) => item.status === "has_contact").length;
+      const reviewCount = collected.filter((item) => item.status === "needs_review").length;
+      setRunMessage(
+        `联系方式提取完成 / ${leadIds.length} 家客户 / 有邮箱 ${emailCount} 家 / 有人工联系方式 ${manualCount} 家 / 待复查 ${reviewCount} 家`
+      );
+      const refreshedLeads = await listLeads(session);
+      setLeads(refreshedLeads);
+      await refreshFollowUps();
+    } catch (caught) {
+      handleApiFailure(caught, "无法批量提取客户联系方式");
+      setRunMessage("联系方式批量提取中断，已完成的客户结果已保留，可重新执行待复查客户");
+    } finally {
+      setRunningDailyContactDiscovery(false);
+    }
+  }
+
+  function retryContactDiscovery() {
+    const retryLeadIds = contactDiscoveryItems
+      .filter((item) => item.status === "needs_review")
+      .map((item) => item.lead_id);
+    void runDailyContactDiscovery(retryLeadIds);
   }
 
   async function createManualLeadFromForm(event: FormEvent<HTMLFormElement>) {
@@ -1973,12 +3135,18 @@ export default function HomePage() {
 
   async function deleteCustomerLead(leadId: string) {
     if (!session) return;
+    const lead = leads.find((item) => item.id === leadId);
+    if (!window.confirm(`确认删除“${lead?.company_name ?? "该客户"}”吗？相关联系人和跟进记录也会删除。`)) {
+      return;
+    }
     setDeletingLeadId(leadId);
     setError("");
     try {
       await deleteLead(session, leadId);
       setLeads((current) => current.filter((lead) => lead.id !== leadId));
+      setLatestSearchLeadIds((current) => current?.filter((currentId) => currentId !== leadId) ?? null);
       setSelectedLeadIds((current) => current.filter((selectedId) => selectedId !== leadId));
+      setSelectedCrmLeadIds((current) => current.filter((selectedId) => selectedId !== leadId));
       setEmailDrafts((current) => current.filter((draft) => draft.lead_id !== leadId));
       setFollowUpTasks((current) => current.filter((task) => task.lead_id !== leadId));
       if (selectedLeadId === leadId) {
@@ -2001,6 +3169,20 @@ export default function HomePage() {
 
   function selectAllVisibleLeadsForCrm(leadIds: string[], selected: boolean) {
     setSelectedLeadIds((current) => {
+      if (!selected) return current.filter((leadId) => !leadIds.includes(leadId));
+      return Array.from(new Set([...current, ...leadIds]));
+    });
+  }
+
+  function selectCrmLeadForBatch(leadId: string, selected: boolean) {
+    setSelectedCrmLeadIds((current) => {
+      if (selected) return current.includes(leadId) ? current : [...current, leadId];
+      return current.filter((selectedId) => selectedId !== leadId);
+    });
+  }
+
+  function selectAllVisibleCrmLeadsForBatch(leadIds: string[], selected: boolean) {
+    setSelectedCrmLeadIds((current) => {
       if (!selected) return current.filter((leadId) => !leadIds.includes(leadId));
       return Array.from(new Set([...current, ...leadIds]));
     });
@@ -2034,6 +3216,116 @@ export default function HomePage() {
       handleApiFailure(caught, "无法保存到 CRM");
     } finally {
       setSavingToCrm(false);
+    }
+  }
+
+  async function runSelectedCustomerBatch() {
+    if (!session || selectedCrmLeadIds.length === 0) return;
+    setRunningCustomerBatch(true);
+    setError("");
+    setCustomerBatchResults([]);
+    let discoveredCount = 0;
+    let verifiedCount = 0;
+    let draftCount = 0;
+    let skippedCount = 0;
+    const resultItems: CustomerBatchResultItem[] = [];
+    try {
+      let draftSnapshot = await listEmailDrafts(session);
+      setEmailDrafts(draftSnapshot);
+      for (const [index, leadId] of selectedCrmLeadIds.entries()) {
+        const lead = leads.find((item) => item.id === leadId);
+        const companyName = lead?.company_name ?? leadId;
+        setCustomerBatchMessage(`正在处理 ${index + 1}/${selectedCrmLeadIds.length}：${companyName}`);
+        try {
+          let detail = await getLeadDetail(session, leadId);
+          if (!detail.contacts.some((contact) => contact.email.trim())) {
+            try {
+              const discovered = await discoverContacts(session, leadId, 10);
+              discoveredCount += discovered.length;
+            } catch (caught) {
+              skippedCount += 1;
+              resultItems.push({
+                leadId,
+                companyName,
+                status: "error",
+                message: `${batchFailureMessage(caught)}，未生成草稿`,
+              });
+              setCustomerBatchResults([...resultItems]);
+              continue;
+            }
+            detail = await getLeadDetail(session, leadId);
+          }
+          let verificationUnavailable = false;
+          for (const contact of detail.contacts.filter((item) => item.email.trim() && !item.email_verification_status)) {
+            try {
+              await verifyContactEmail(session, leadId, contact.id);
+              verifiedCount += 1;
+            } catch {
+              verificationUnavailable = true;
+            }
+          }
+          detail = await getLeadDetail(session, leadId);
+          const contact = chooseBatchContact(detail.contacts, draftSnapshot);
+          if (!contact) {
+            skippedCount += 1;
+            const hasEmail = detail.contacts.some((item) => item.email.trim());
+            const hasBlockedEmail = detail.contacts.some((item) => item.email.trim() && contactEmailIsBlocked(item));
+            const hasManualChannel = detail.contacts.some(contactHasManualChannel);
+            const hasExistingDraft = draftSnapshot.some(
+              (draft) => draft.lead_id === leadId && draft.status !== "rejected"
+            );
+            const message = hasExistingDraft
+              ? "已有未驳回的开发信草稿，无需重复生成"
+              : hasBlockedEmail
+                ? "邮箱验证结果不适合发送，请打开详情检查"
+                : hasEmail
+                  ? "邮箱暂不可用于批量草稿，请打开详情检查"
+                  : hasManualChannel
+                    ? "已找到电话或社交媒体，但没有公开邮箱，请打开详情人工联系"
+                    : "官网未找到公开邮箱或其他联系方式";
+            resultItems.push({ leadId, companyName, status: "warning", message });
+            setCustomerBatchResults([...resultItems]);
+            continue;
+          }
+          const draft = await createEmailDraft(session, leadId, contact.id);
+          draftCount += 1;
+          draftSnapshot = [draft, ...draftSnapshot];
+          setEmailDrafts(draftSnapshot);
+          const isUnverified = !normalizeContactEmailStatus(contact);
+          resultItems.push({
+            leadId,
+            companyName,
+            status: isUnverified || verificationUnavailable ? "warning" : "success",
+            message: isUnverified || verificationUnavailable
+              ? `已生成待审核草稿：${contact.email}（邮箱未验证，发送前请人工确认）`
+              : `已生成待审核草稿：${contact.email}`,
+          });
+          setCustomerBatchResults([...resultItems]);
+        } catch (caught) {
+          skippedCount += 1;
+          resultItems.push({
+            leadId,
+            companyName,
+            status: "error",
+            message: `${batchFailureMessage(caught)}，未生成草稿`,
+          });
+          setCustomerBatchResults([...resultItems]);
+        }
+      }
+      const refreshedLeads = await listLeads(session);
+      setLeads(refreshedLeads);
+      await refreshFollowUps();
+      await refreshEmailDrafts(draftSnapshot[0]?.id);
+      setSelectedCrmLeadIds([]);
+      if (draftCount > 0) setReviewOpen(true);
+      setCustomerBatchMessage(
+        `批量完成：新增或更新联系方式 ${discoveredCount} 个，验证邮箱 ${verifiedCount} 个，生成草稿 ${draftCount} 封，跳过 ${skippedCount} 项`
+      );
+    } catch (caught) {
+      handleApiFailure(caught, "批量开发客户失败");
+      setCustomerBatchMessage("批量开发中断，请检查 API 配置或客户数据后重试");
+    } finally {
+      setRunningCustomerBatch(false);
     }
   }
 
@@ -2095,6 +3387,13 @@ export default function HomePage() {
         phone: String(form.get("phone") ?? "").trim(),
         linkedin_url: String(form.get("linkedin_url") ?? "").trim(),
         whatsapp: String(form.get("whatsapp") ?? "").trim(),
+        social_profiles: [
+          { platform: "Facebook", url: String(form.get("facebook_url") ?? "").trim() },
+          { platform: "Instagram", url: String(form.get("instagram_url") ?? "").trim() },
+          { platform: "TikTok", url: String(form.get("tiktok_url") ?? "").trim() },
+          { platform: "其他平台", url: String(form.get("other_social_url") ?? "").trim() },
+        ].filter((profile) => profile.url),
+        source_url: String(form.get("source_url") ?? "").trim(),
         is_primary: form.get("is_primary") === "on",
       });
       const refreshed = await getLeadDetail(session, leadDetail.id);
@@ -2105,6 +3404,27 @@ export default function HomePage() {
       handleApiFailure(caught, "无法添加联系人");
     } finally {
       setAddingContact(false);
+    }
+  }
+
+  async function discoverContactRecords() {
+    if (!session || !leadDetail) return;
+    setDiscoveringContacts(true);
+    setError("");
+    try {
+      await discoverContacts(session, leadDetail.id, 10);
+      const refreshed = await getLeadDetail(session, leadDetail.id);
+      setLeadDetail(refreshed);
+      setLeads((current) =>
+        current.map((lead) =>
+          lead.id === refreshed.id ? { ...lead, status: refreshed.status } : lead
+        )
+      );
+      await refreshFollowUps();
+    } catch (caught) {
+      handleApiFailure(caught, "无法补充联系人");
+    } finally {
+      setDiscoveringContacts(false);
     }
   }
 
@@ -2121,6 +3441,22 @@ export default function HomePage() {
       handleApiFailure(caught, "无法删除联系人");
     } finally {
       setDeletingContactId("");
+    }
+  }
+
+  async function verifyContactEmailRecord(contactId: string) {
+    if (!session || !leadDetail) return;
+    setVerifyingContactId(contactId);
+    setError("");
+    try {
+      await verifyContactEmail(session, leadDetail.id, contactId);
+      const refreshed = await getLeadDetail(session, leadDetail.id);
+      setLeadDetail(refreshed);
+      await refreshFollowUps();
+    } catch (caught) {
+      handleApiFailure(caught, "无法验证联系人邮箱");
+    } finally {
+      setVerifyingContactId("");
     }
   }
 
@@ -2209,6 +3545,63 @@ export default function HomePage() {
     }
   }
 
+  async function addQuoteDraftRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !leadDetail) return;
+    const form = new FormData(event.currentTarget);
+    setAddingQuoteDraft(true);
+    setError("");
+    try {
+      await createQuoteDraft(session, leadDetail.id, quoteDraftPayloadFromForm(form));
+      const refreshed = await getLeadDetail(session, leadDetail.id);
+      setLeadDetail(refreshed);
+      setLeads((current) => current.map((lead) => (lead.id === refreshed.id ? refreshed : lead)));
+      event.currentTarget.reset();
+    } catch (caught) {
+      handleApiFailure(caught, "无法创建报价草稿");
+    } finally {
+      setAddingQuoteDraft(false);
+    }
+  }
+
+  async function saveQuoteDraftRecord(draftId: string, event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !leadDetail) return;
+    const form = new FormData(event.currentTarget);
+    setSavingQuoteDraftId(draftId);
+    setError("");
+    try {
+      await updateQuoteDraft(session, draftId, quoteDraftPayloadFromForm(form));
+      const refreshed = await getLeadDetail(session, leadDetail.id);
+      setLeadDetail(refreshed);
+    } catch (caught) {
+      handleApiFailure(caught, "无法保存报价草稿");
+    } finally {
+      setSavingQuoteDraftId("");
+    }
+  }
+
+  async function markSelectedQuoteDraftSent(draftId: string) {
+    if (!session || !leadDetail) return;
+    setSendingQuoteDraftId(draftId);
+    setError("");
+    try {
+      const updated = await markQuoteDraftSent(session, draftId);
+      setLeads((current) =>
+        current.map((lead) =>
+          lead.id === updated.lead_id ? { ...lead, status: "quoting" } : lead
+        )
+      );
+      const refreshed = await getLeadDetail(session, updated.lead_id);
+      setLeadDetail(refreshed);
+      await refreshFollowUps();
+    } catch (caught) {
+      handleApiFailure(caught, "无法标记报价已发送");
+    } finally {
+      setSendingQuoteDraftId("");
+    }
+  }
+
   async function saveEmailDraft(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!session || !selectedEmailDraft) return;
@@ -2226,6 +3619,44 @@ export default function HomePage() {
       handleApiFailure(caught, "无法保存开发信草稿");
     } finally {
       setSavingEmailDraft(false);
+    }
+  }
+
+  async function saveDraftRecipient(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!session || !selectedEmailDraft) return;
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("contact_email") ?? "").trim();
+    setSavingDraftRecipient(true);
+    setError("");
+    try {
+      const updated = await updateDraftContactEmail(session, selectedEmailDraft.id, email);
+      setEmailDrafts((current) => current.map((draft) => (draft.id === updated.id ? updated : draft)));
+      setSelectedDraftId(updated.id);
+      if (leadDetail?.id === updated.lead_id) {
+        setLeadDetail(await getLeadDetail(session, updated.lead_id));
+      }
+    } catch (caught) {
+      handleApiFailure(caught, "无法更新客户邮箱");
+    } finally {
+      setSavingDraftRecipient(false);
+    }
+  }
+
+  async function verifyDraftRecipient() {
+    if (!session || !selectedEmailDraft) return;
+    setVerifyingDraftRecipient(true);
+    setError("");
+    try {
+      await verifyContactEmail(session, selectedEmailDraft.lead_id, selectedEmailDraft.contact_id);
+      await refreshEmailDrafts(selectedEmailDraft.id);
+      if (leadDetail?.id === selectedEmailDraft.lead_id) {
+        setLeadDetail(await getLeadDetail(session, selectedEmailDraft.lead_id));
+      }
+    } catch (caught) {
+      handleApiFailure(caught, "无法验证客户邮箱");
+    } finally {
+      setVerifyingDraftRecipient(false);
     }
   }
 
@@ -2263,7 +3694,7 @@ export default function HomePage() {
       }
       await refreshFollowUps();
     } catch (caught) {
-      handleApiFailure(caught, "无法标记开发信已发送");
+      handleApiFailure(caught, "无法发送开发信");
     } finally {
       setReviewingEmailDraft(false);
     }
@@ -2317,6 +3748,19 @@ export default function HomePage() {
           <div className="topbarActions"><button className="utilityButton" type="button">中文</button><button className="utilityButton logoutButton" type="button" onClick={logout}>退出登录</button><button className="profileButton" type="button" aria-label="打开 Mia Chen 资料">MC</button></div>
         </header>
         <div className="content">
+          {activeNav === API_STATUS_NAV ? (
+            <ApiStatusPage
+              connectors={customerDevelopmentConnectors}
+              sources={searchSources}
+              loadingConnectors={loadingCustomerDevelopmentConnectors}
+              loadingSources={loadingSearchSources}
+              error={apiStatusError}
+              updatingSourceId={updatingSearchSourceId}
+              onSourceToggle={toggleSearchSource}
+              onRefresh={() => void refreshApiStatus()}
+            />
+          ) : (
+          <>
           <section className="pageHeading">
             <div><p className="sectionLabel">客户开发</p><h1>外贸客户开发工作台</h1><p>配置产品线，启动基于公开证据的客户搜索，并把合格线索推进到 CRM 和开发信流程。</p></div>
             <button className="outlineButton exportButton" type="button" onClick={exportActivityCsv}>
@@ -2325,8 +3769,80 @@ export default function HomePage() {
           </section>
           {error && <div className="errorBanner" role="alert">{error}</div>}
           <section className="metricGrid" aria-label="销售指标">{dashboardMetrics.map((metric) => <MetricTile key={metric.label} {...metric} />)}</section>
+          <DiscoveryWorkbench
+            productLines={productLines}
+            selectedProductLineId={selectedProductLineId}
+            targetMarket={targetMarket}
+            resolvedLocation={resolvedLocation}
+            locationSubdivisions={locationSubdivisions}
+            resolvingLocation={resolvingLocation}
+            allowRepeatLocation={allowRepeatLocation}
+            buyerProfile={buyerProfile}
+            excludedKeywords={excludedKeywords}
+            searchLimit={searchLimit}
+            running={running}
+            runMessage={selectedProductLine ? runMessage : "请先创建第一个产品线，再开始搜索"}
+            sources={searchSources}
+            loadingSources={loadingSearchSources}
+            updatingSourceId={updatingSearchSourceId}
+            leads={latestSearchLeadIds === null
+              ? sortedLeads
+              : sortedLeads.filter((lead) => latestSearchLeadIds.includes(lead.id))}
+            showingLatestSearch={latestSearchLeadIds !== null}
+            deletingLeadId={deletingLeadId}
+            priorityOnly={priorityOnly}
+            selectedLeadIds={selectedLeadIds}
+            savingToCrm={savingToCrm}
+            runningDailyContactDiscovery={runningDailyContactDiscovery}
+            contactDiscoveryProgress={contactDiscoveryProgress}
+            contactDiscoveryItems={contactDiscoveryItems}
+            discoveryRun={lastDiscoveryRun}
+            onProductLineChange={selectProductLine}
+            onTargetMarketChange={changeTargetMarket}
+            onResolveLocation={() => void resolveLocation()}
+            onSelectLocation={selectAdministrativeArea}
+            onAllowRepeatLocationChange={setAllowRepeatLocation}
+            onBuyerProfileChange={setBuyerProfile}
+            onExcludedKeywordsChange={setExcludedKeywords}
+            onSearchLimitChange={setSearchLimit}
+            onSourceToggle={toggleSearchSource}
+            onRun={runDiscovery}
+            onPriorityToggle={() => setPriorityOnly((current) => !current)}
+            onShowAllLeads={() => setLatestSearchLeadIds(null)}
+            onDelete={deleteCustomerLead}
+            onSelectLead={selectLeadForCrm}
+            onSelectAllVisible={selectAllVisibleLeadsForCrm}
+            onSaveToCrm={saveSelectedLeadsToCrm}
+            onOpenDetail={openLeadDetail}
+            onDiscoverDailyContacts={() => void runDailyContactDiscovery()}
+            onRetryContactDiscovery={retryContactDiscovery}
+          />
           <SalesFunnelPanel {...salesFunnel} />
-          <ProductLineSetup productLines={productLines} loading={loadingProductLines} creating={creatingProductLine} onCreate={createProductLineFromForm} />
+          <CRMCustomerManager
+            leads={sortedLeads}
+            productLines={productLines}
+            selectedProductLineId={selectedProductLineId}
+            selectedCrmLeadIds={selectedCrmLeadIds}
+            creating={creatingManualLead}
+            deletingLeadId={deletingLeadId}
+            runningBatch={runningCustomerBatch}
+            batchMessage={customerBatchMessage}
+            batchResults={customerBatchResults}
+            onCreate={createManualLeadFromForm}
+            onDelete={deleteCustomerLead}
+            onOpenDetail={openLeadDetail}
+            onSelectLead={selectCrmLeadForBatch}
+            onSelectAllVisible={selectAllVisibleCrmLeadsForBatch}
+            onRunBatch={runSelectedCustomerBatch}
+          />
+          <ProductLineSetup
+            productLines={productLines}
+            loading={loadingProductLines}
+            creating={creatingProductLine}
+            deletingProductLineId={deletingProductLineId}
+            onCreate={createProductLineFromForm}
+            onDelete={deleteProductLineRecord}
+          />
           <ProductCatalogManager
             productLines={productLines}
             selectedProductLineId={selectedProductLineId}
@@ -2335,28 +3851,6 @@ export default function HomePage() {
             deletingProductItemId={deletingProductItemId}
             onCreate={createProductItemFromForm}
             onDelete={deleteCatalogProductItem}
-          />
-          <CustomerAgent
-            productLines={productLines}
-            selectedProductLineId={selectedProductLineId}
-            targetMarket={targetMarket}
-            buyerProfile={buyerProfile}
-            running={running}
-            runMessage={selectedProductLine ? runMessage : "请先创建第一个产品线，再开始搜索"}
-            onProductLineChange={selectProductLine}
-            onTargetMarketChange={setTargetMarket}
-            onBuyerProfileChange={setBuyerProfile}
-            onRun={runDiscovery}
-          />
-          <CRMCustomerManager
-            leads={leads}
-            productLines={productLines}
-            selectedProductLineId={selectedProductLineId}
-            creating={creatingManualLead}
-            deletingLeadId={deletingLeadId}
-            onCreate={createManualLeadFromForm}
-            onDelete={deleteCustomerLead}
-            onOpenDetail={openLeadDetail}
           />
           <WebsiteInquiryPanel
             inquiries={websiteInquiries}
@@ -2373,6 +3867,7 @@ export default function HomePage() {
             <ReviewQueue
               drafts={emailDrafts}
               loading={loadingEmailDrafts}
+              emailDeliveryStatus={emailDeliveryStatus}
               onOpen={() => openEmailDraftQueue()}
               onOpenDraft={openEmailDraftQueue}
             />
@@ -2394,17 +3889,8 @@ export default function HomePage() {
               onRefresh={refreshFollowUps}
             />
           </div>
-          <LeadTable
-            leads={leads}
-            priorityOnly={priorityOnly}
-            selectedLeadIds={selectedLeadIds}
-            savingToCrm={savingToCrm}
-            onPriorityToggle={() => setPriorityOnly((current) => !current)}
-            onSelectLead={selectLeadForCrm}
-            onSelectAllVisible={selectAllVisibleLeadsForCrm}
-            onSaveToCrm={saveSelectedLeadsToCrm}
-            onOpenDetail={openLeadDetail}
-          />
+          </>
+          )}
         </div>
       </section>
       <CustomerDetailDrawer
@@ -2414,25 +3900,39 @@ export default function HomePage() {
         addingContact={addingContact}
         addingFollowUp={addingFollowUp}
         addingTask={addingTask}
+        addingQuoteDraft={addingQuoteDraft}
+        discoveringContacts={discoveringContacts}
         deletingContactId={deletingContactId}
+        verifyingContactId={verifyingContactId}
         generatingDraftContactId={generatingDraftContactId}
         completingTaskId={completingTaskId}
+        savingQuoteDraftId={savingQuoteDraftId}
+        sendingQuoteDraftId={sendingQuoteDraftId}
         onClose={closeLeadDetail}
         onSave={saveLeadDetail}
         onAddContact={addContactRecord}
+        onDiscoverContacts={discoverContactRecords}
         onDeleteContact={deleteContactRecord}
+        onVerifyContactEmail={verifyContactEmailRecord}
         onCreateEmailDraft={createEmailDraftForContact}
         onAddFollowUp={addFollowUpRecord}
         onAddTask={addFollowUpTaskRecord}
         onCompleteTask={completeTask}
+        onCreateQuoteDraft={addQuoteDraftRecord}
+        onUpdateQuoteDraft={saveQuoteDraftRecord}
+        onMarkQuoteDraftSent={markSelectedQuoteDraftSent}
       />
       <ReviewDrawer
         open={reviewOpen}
         draft={selectedEmailDraft}
         saving={savingEmailDraft}
+        savingRecipient={savingDraftRecipient}
+        verifyingRecipient={verifyingDraftRecipient}
         reviewing={reviewingEmailDraft}
         onClose={() => setReviewOpen(false)}
         onSave={saveEmailDraft}
+        onSaveRecipient={saveDraftRecipient}
+        onVerifyRecipient={verifyDraftRecipient}
         onApprove={approveEmailDraft}
         onMarkSent={markSelectedEmailDraftSent}
         onReject={rejectEmailDraft}

@@ -43,6 +43,16 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
       }),
     });
   });
+  await page.route(/\/discovery\/organizations\/org-1\/locations\/resolve$/, async (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ query: "Germany", product_line_id: "product-1" });
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        area: { scope_id: "germany-place", name: "Germany", formatted: "Germany", search_label: "Germany", country_code: "DE", level: "country", search_count: 0, last_searched_at: null },
+        subdivisions: [],
+      }),
+    });
+  });
   await page.route(/\/discovery\/organizations\/org-1\/leads$/, async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -99,31 +109,86 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
   await page.route(/\/discovery\/organizations\/org-1\/email-drafts$/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
   });
+  await page.route(/\/platform\/organizations\/org-1\/email-delivery$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        provider: "smtp",
+        configured: false,
+        from_email: null,
+        from_name: "Trade Axis",
+        missing: ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM_EMAIL"],
+      }),
+    });
+  });
+  await page.route(/\/platform\/organizations\/org-1\/customer-development-connectors$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        connectors: [
+          {
+            connector_id: "public_search",
+            label: "公开客户搜索",
+            provider: "Bocha",
+            purpose: "按产品和市场搜索潜在客户官网",
+            configured: true,
+            missing: [],
+          },
+        ],
+      }),
+    });
+  });
+  await page.route(/\/platform\/organizations\/org-1\/search-sources$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        sources: [
+          {
+            source_id: "bocha",
+            label: "公开网页搜索",
+            provider: "Bocha",
+            category: "web_search",
+            purpose: "按产品和市场搜索潜在客户官网",
+            base_url: "https://bochaai.com",
+            enabled: true,
+            configured: true,
+            status: "ready",
+            missing: [],
+          },
+        ],
+      }),
+    });
+  });
   await page.route(/\/discovery\/organizations\/org-1\/follow-ups/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
   });
   await page.route(/\/discovery\/organizations\/org-1\/follow-up-tasks(?:\?.*)?$/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
   });
+  await page.route(/\/discovery\/organizations\/org-1\/website-inquiries(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "外贸客户开发工作台" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "客户搜索 Agent" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "地图客户搜索工作台" })).toBeVisible();
 
   await page.getByLabel("搜索产品线").selectOption("product-1");
   await page.getByLabel("搜索目标市场").fill("Germany");
+  await page.getByRole("button", { name: "识别行政区" }).click();
+  await expect(page.getByLabel("行政区选择").locator("strong").getByText("Germany", { exact: true })).toBeVisible();
   await page.getByLabel("搜索客户类型").selectOption("Distributor");
   await page.getByRole("button", { name: "开始搜索客户" }).click();
 
   await expect(page.getByText("搜索完成")).toBeVisible();
-  await expect(page.locator("tbody").getByText("LumenHaus GmbH")).toBeVisible();
+  await expect(page.getByLabel("客户搜索结果列表").getByText("LumenHaus GmbH")).toBeVisible();
   await expect(page.getByLabel("销售指标").locator(".metricTile").filter({ hasText: "新增线索" }).getByText("2")).toBeVisible();
   await expect(page.getByLabel("销售指标").locator(".metricTile").filter({ hasText: "优先客户" }).getByText("1")).toBeVisible();
   await expect(page.getByRole("heading", { name: "客户阶段总览" })).toBeVisible();
   await expect(
     page.getByLabel("客户阶段漏斗").locator(".funnelStage").filter({ hasText: "新客户" }).getByText("2 个 / 100%")
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "只看优先客户" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "优先客户" })).toBeVisible();
 
   const [download] = await Promise.all([
     page.waitForEvent("download"),
@@ -136,8 +201,8 @@ test("runs a customer discovery task and surfaces review work", async ({ page })
   expect(csv).toContain("LumenHaus GmbH");
   expect(csv).toContain("lead");
 
-  await page.getByRole("button", { name: "只看优先客户" }).click();
-  await expect(page.locator("tbody").getByText("LumenHaus GmbH")).toHaveCount(0);
+  await page.getByRole("button", { name: "优先客户" }).click();
+  await expect(page.getByLabel("客户搜索结果列表").getByText("LumenHaus GmbH")).toHaveCount(0);
 
   await page.getByRole("button", { name: "审核 0 封草稿" }).click();
   await expect(page.getByText("邮件审核队列")).toBeVisible();

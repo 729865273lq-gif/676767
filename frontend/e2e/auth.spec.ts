@@ -39,6 +39,36 @@ test("registers a workspace, stores the session, and opens the dashboard", async
       body: JSON.stringify([]),
     });
   });
+  await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/platform\/organizations\/org-1\/email-delivery/, async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer local-session-token");
+    await route.fulfill({
+      contentType: "application/json",
+      status: 200,
+      body: JSON.stringify({
+        provider: "smtp",
+        configured: false,
+        from_email: null,
+        from_name: "Trade Axis",
+        missing: ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM_EMAIL"],
+      }),
+    });
+  });
+  await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/platform\/organizations\/org-1\/customer-development-connectors/, async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer local-session-token");
+    await route.fulfill({
+      contentType: "application/json",
+      status: 200,
+      body: JSON.stringify({ connectors: [] }),
+    });
+  });
+  await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/platform\/organizations\/org-1\/search-sources/, async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer local-session-token");
+    await route.fulfill({
+      contentType: "application/json",
+      status: 200,
+      body: JSON.stringify({ sources: [] }),
+    });
+  });
   await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/discovery\/organizations\/org-1\/leads/, async (route) => {
     expect(route.request().headers().authorization).toBe("Bearer local-session-token");
     await route.fulfill({
@@ -64,6 +94,14 @@ test("registers a workspace, stores the session, and opens the dashboard", async
     });
   });
   await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/discovery\/organizations\/org-1\/follow-up-tasks(?:\?.*)?$/, async (route) => {
+    expect(route.request().headers().authorization).toBe("Bearer local-session-token");
+    await route.fulfill({
+      contentType: "application/json",
+      status: 200,
+      body: JSON.stringify([]),
+    });
+  });
+  await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/discovery\/organizations\/org-1\/website-inquiries(?:\?.*)?$/, async (route) => {
     expect(route.request().headers().authorization).toBe("Bearer local-session-token");
     await route.fulfill({
       contentType: "application/json",

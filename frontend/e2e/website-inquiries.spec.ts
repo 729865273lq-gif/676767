@@ -71,6 +71,7 @@ const convertedLead = {
     },
   ],
   follow_up_tasks: [],
+  quote_drafts: [],
 };
 
 test("converts a website inquiry into a CRM customer", async ({ page }) => {
@@ -118,6 +119,38 @@ test("converts a website inquiry into a CRM customer", async ({ page }) => {
   });
   await page.route(/\/discovery\/organizations\/org-1\/email-drafts$/, async (route) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
+  await page.route(/\/platform\/organizations\/org-1\/email-delivery$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        provider: "smtp",
+        configured: false,
+        from_email: null,
+        from_name: "Trade Axis",
+        missing: ["SMTP_HOST", "SMTP_USERNAME", "SMTP_PASSWORD", "SMTP_FROM_EMAIL"],
+      }),
+    });
+  });
+  await page.route(/\/platform\/organizations\/org-1\/customer-development-connectors$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        connectors: [
+          {
+            connector_id: "email_finder",
+            label: "邮箱查找",
+            provider: "Hunter",
+            purpose: "按公司域名查找可联系邮箱",
+            configured: false,
+            missing: ["HUNTER_API_KEY"],
+          },
+        ],
+      }),
+    });
+  });
+  await page.route(/\/platform\/organizations\/org-1\/search-sources$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ sources: [] }) });
   });
   await page.route(/\/discovery\/organizations\/org-1\/follow-ups/, async (route) => {
     await route.fulfill({

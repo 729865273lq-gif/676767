@@ -28,6 +28,43 @@ V1 is a multi-tenant sales workbench for evidence-backed prospect discovery and 
 
 The workbench is available at `http://localhost:3000`, and the API health endpoint is `http://localhost:8000/health`.
 
+## Outbound email
+
+Email drafts are never sent automatically. After a draft is reviewed and approved, the send action uses SMTP credentials from `.env`:
+
+```powershell
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=sender@example.com
+SMTP_PASSWORD=your-smtp-password
+SMTP_FROM_EMAIL=sender@example.com
+SMTP_FROM_NAME=Trade Axis
+SMTP_USE_TLS=true
+```
+
+For Gmail or Outlook, use an app password or SMTP credential for local development. Production should move to OAuth before broad use.
+
+## Customer development APIs
+
+The dashboard shows a read-only API readiness panel for the customer development flow. Add keys to `.env` as you connect providers:
+
+```powershell
+BOCHA_API_KEY=...
+GOOGLE_CSE_API_KEY=...
+GOOGLE_CSE_CX=...
+GOOGLE_PLACES_API_KEY=...
+TOMTOM_API_KEY=...
+SERPAPI_API_KEY=...
+DATAFORSEO_LOGIN=...
+DATAFORSEO_PASSWORD=...
+APOLLO_API_KEY=...
+HUNTER_API_KEY=...
+ZEROBOUNCE_API_KEY=...
+NEVERBOUNCE_API_KEY=...
+```
+
+Use the search-source panel to enable or disable customer search providers per workspace. OpenStreetMap is enabled by default for low-volume, user-triggered global business search and requires no API key. TomTom adds overseas POI results with public phone and website fields after `TOMTOM_API_KEY` is configured. Create a free key at `https://developer.tomtom.com/`, add it to `.env`, and restart the API. Bocha and Google Programmable Search cover public web results. Google Places remains optional. The public-contact scan reads mail, phone, WhatsApp, LinkedIn, Facebook, Instagram, TikTok, and other public links from a company's website, while Hunter can supplement named email contacts when configured. All outreach remains manual.
+
 ## Verification
 
 On Windows, run the component commands directly:

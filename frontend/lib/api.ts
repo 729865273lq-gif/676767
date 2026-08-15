@@ -9,6 +9,7 @@ export type ProductLine = {
   product_keywords: string[];
   buyer_profiles: string[];
   target_regions: string[];
+  excluded_keywords: string[];
   is_active: boolean;
   suppliers: string[];
   product_items: ProductItem[];
@@ -51,12 +52,51 @@ export type PublicProductCatalog = {
   product_lines: PublicProductLine[];
 };
 
+export type EmailDeliveryStatus = {
+  provider: string;
+  configured: boolean;
+  from_email: string | null;
+  from_name: string;
+  missing: string[];
+};
+
+export type ConnectorStatus = {
+  connector_id: string;
+  label: string;
+  provider: string;
+  purpose: string;
+  configured: boolean;
+  missing: string[];
+};
+
+export type CustomerDevelopmentConnectors = {
+  connectors: ConnectorStatus[];
+};
+
+export type SearchSource = {
+  source_id: string;
+  label: string;
+  provider: string;
+  category: string;
+  purpose: string;
+  base_url: string;
+  enabled: boolean;
+  configured: boolean;
+  status: "ready" | "needs_config" | "planned";
+  missing: string[];
+};
+
+export type SearchSourcesResponse = {
+  sources: SearchSource[];
+};
+
 export type CreateProductLinePayload = {
   name: string;
   description: string;
   product_keywords: string[];
   buyer_profiles: string[];
   target_regions: string[];
+  excluded_keywords: string[];
 };
 
 export type ProductItemPayload = {
@@ -72,7 +112,31 @@ export type DiscoveryRun = {
   workflow_run_id: string;
   query: string;
   lead_count: number;
+  lead_ids?: string[];
+  filtered_count?: number;
+  query_count?: number;
+  queries?: string[];
+  candidate_count?: number;
+  duplicate_count?: number;
+  overflow_count?: number;
+  failed_query_count?: number;
   state: string;
+};
+
+export type AdministrativeArea = {
+  scope_id: string;
+  name: string;
+  formatted: string;
+  search_label: string;
+  country_code: string;
+  level: string;
+  search_count: number;
+  last_searched_at: string | null;
+};
+
+export type ResolvedLocation = {
+  area: AdministrativeArea;
+  subdivisions: AdministrativeArea[];
 };
 
 export type Lead = {
@@ -90,6 +154,14 @@ export type Lead = {
   notes: string;
   reasons: string[];
   missing_signals: string[];
+  contact_discovery_status: "not_scanned" | "has_email" | "has_contact" | "no_contacts" | "needs_review";
+  contact_discovery_message: string;
+  contact_discovered_at: string | null;
+  contact_email_count: number;
+  contact_phone_count: number;
+  contact_social_count: number;
+  last_discovered_at: string;
+  created_at: string;
   evidence: Array<{ source_url: string; source_excerpt: string; signal_name: string }>;
 };
 
@@ -125,6 +197,37 @@ export type FollowUpTask = {
   lead_status?: LeadStatus;
 };
 
+export type QuoteDraftStatus = "draft" | "sent";
+
+export type QuoteLineItem = {
+  item_name: string;
+  quantity: number;
+  unit_price: number;
+  unit: string;
+  notes: string;
+};
+
+export type QuoteDraft = {
+  id: string;
+  organization_id: string;
+  lead_id: string;
+  product_line_id: string;
+  created_by_user_id: string | null;
+  sent_by_user_id: string | null;
+  status: QuoteDraftStatus;
+  title: string;
+  currency: string;
+  incoterm: string;
+  valid_until: string | null;
+  line_items: QuoteLineItem[];
+  notes: string;
+  total_amount: number;
+  created_at: string;
+  updated_at: string;
+  sent_at: string | null;
+  lead_company_name: string;
+};
+
 export type ContactRecord = {
   id: string;
   lead_id: string;
@@ -134,6 +237,12 @@ export type ContactRecord = {
   phone: string;
   linkedin_url: string;
   whatsapp: string;
+  social_profiles: Array<{ platform: string; url: string }>;
+  source_url: string;
+  email_verification_provider: string;
+  email_verification_status: string;
+  email_verification_sub_status: string;
+  email_verified_at: string | null;
   is_primary: boolean;
   created_at: string;
 };
@@ -142,6 +251,45 @@ export type LeadDetail = Lead & {
   contacts: ContactRecord[];
   follow_ups: FollowUpRecord[];
   follow_up_tasks: FollowUpTask[];
+  quote_drafts: QuoteDraft[];
+};
+
+export type DailyContactDiscoveryItem = {
+  lead_id: string;
+  company_name: string;
+  website: string;
+  status: "found" | "no_contacts" | "skipped" | "failed";
+  contact_count: number;
+  message: string;
+};
+
+export type DailyContactDiscoveryResult = {
+  discovery_date: string;
+  timezone: string;
+  lead_count: number;
+  processed_count: number;
+  contacts_found: number;
+  no_contacts_count: number;
+  skipped_count: number;
+  failed_count: number;
+  items: DailyContactDiscoveryItem[];
+};
+
+export type BatchContactDiscoveryItem = {
+  lead_id: string;
+  company_name: string;
+  website: string;
+  status: Lead["contact_discovery_status"];
+  contact_count: number;
+  email_count: number;
+  checked_email_count: number;
+  phone_count: number;
+  social_count: number;
+  message: string;
+};
+
+export type BatchContactDiscoveryResult = {
+  items: BatchContactDiscoveryItem[];
 };
 
 export type ManualLeadPayload = {
@@ -172,6 +320,15 @@ export type FollowUpTaskPayload = {
   due_at?: string | null;
 };
 
+export type QuoteDraftPayload = {
+  title: string;
+  currency?: string;
+  incoterm?: string;
+  valid_until?: string | null;
+  line_items: QuoteLineItem[];
+  notes?: string;
+};
+
 export type ContactPayload = {
   name: string;
   title?: string;
@@ -179,6 +336,8 @@ export type ContactPayload = {
   phone?: string;
   linkedin_url?: string;
   whatsapp?: string;
+  social_profiles?: Array<{ platform: string; url: string }>;
+  source_url?: string;
   is_primary?: boolean;
 };
 
@@ -236,6 +395,7 @@ export type EmailDraft = {
   status: EmailDraftStatus;
   subject: string;
   body: string;
+  provider_message_id: string;
   evidence_snapshot: Array<{ signal_name: string; source_excerpt: string; source_url: string }>;
   rejection_reason: string;
   created_at: string;
@@ -245,6 +405,15 @@ export type EmailDraft = {
   lead_company_name: string;
   contact_name: string;
   contact_email: string;
+  current_contact_email: string;
+  contact_email_verification_provider: string;
+  contact_email_verification_status: string;
+  contact_email_verification_sub_status: string;
+  contact_email_verified_at: string | null;
+  contact_source_url: string;
+  send_blocked: boolean;
+  send_risk_level: "safe" | "caution" | "warning" | "blocked";
+  send_risk_message: string;
 };
 
 export class ApiError extends Error {
@@ -291,6 +460,14 @@ export function createProductLine(session: Session, payload: CreateProductLinePa
   });
 }
 
+export async function deleteProductLine(session: Session, productLineId: string) {
+  await requestJson<null>(
+    session,
+    `/platform/organizations/${session.organization_id}/product-lines/${productLineId}`,
+    { method: "DELETE" }
+  );
+}
+
 export function createProductItem(session: Session, productLineId: string, payload: ProductItemPayload) {
   return requestJson<ProductItem>(
     session,
@@ -332,12 +509,36 @@ export async function fetchPublicProductCatalog(organizationId: string) {
 
 export function startDiscovery(
   session: Session,
-  payload: { product_line_id: string; target_market: string; buyer_profile?: string; limit: number }
+  payload: {
+    product_line_id: string;
+    target_market: string;
+    location_scope_id?: string;
+    location_country_code?: string;
+    allow_repeat_location?: boolean;
+    buyer_profile?: string;
+    excluded_keywords?: string[];
+    limit: number;
+  }
 ) {
   return requestJson<DiscoveryRun>(session, `/discovery/organizations/${session.organization_id}/runs`, {
     method: "POST",
     body: JSON.stringify({ ...payload, idempotency_key: `discovery-${Date.now()}` }),
   });
+}
+
+export function resolveAdministrativeLocation(
+  session: Session,
+  query: string,
+  productLineId?: string,
+) {
+  return requestJson<ResolvedLocation>(
+    session,
+    `/discovery/organizations/${session.organization_id}/locations/resolve`,
+    {
+      method: "POST",
+      body: JSON.stringify({ query, product_line_id: productLineId ?? "" }),
+    }
+  );
 }
 
 export function listLeads(session: Session, workflowRunId?: string) {
@@ -419,6 +620,68 @@ export function completeFollowUpTask(session: Session, taskId: string) {
   );
 }
 
+export function createQuoteDraft(session: Session, leadId: string, payload: QuoteDraftPayload) {
+  return requestJson<QuoteDraft>(
+    session,
+    `/discovery/organizations/${session.organization_id}/leads/${leadId}/quote-drafts`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function updateQuoteDraft(session: Session, draftId: string, payload: QuoteDraftPayload) {
+  return requestJson<QuoteDraft>(
+    session,
+    `/discovery/organizations/${session.organization_id}/quote-drafts/${draftId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function markQuoteDraftSent(session: Session, draftId: string) {
+  return requestJson<QuoteDraft>(
+    session,
+    `/discovery/organizations/${session.organization_id}/quote-drafts/${draftId}/send`,
+    { method: "POST" }
+  );
+}
+
+export function getEmailDeliveryStatus(session: Session) {
+  return requestJson<EmailDeliveryStatus>(
+    session,
+    `/platform/organizations/${session.organization_id}/email-delivery`
+  );
+}
+
+export function getCustomerDevelopmentConnectors(session: Session) {
+  return requestJson<CustomerDevelopmentConnectors>(
+    session,
+    `/platform/organizations/${session.organization_id}/customer-development-connectors`
+  );
+}
+
+export function listSearchSources(session: Session) {
+  return requestJson<SearchSourcesResponse>(
+    session,
+    `/platform/organizations/${session.organization_id}/search-sources`
+  );
+}
+
+export function updateSearchSource(session: Session, sourceId: string, enabled: boolean) {
+  return requestJson<SearchSource>(
+    session,
+    `/platform/organizations/${session.organization_id}/search-sources/${sourceId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }
+  );
+}
+
 export function createContact(session: Session, leadId: string, payload: ContactPayload) {
   return requestJson<ContactRecord>(
     session,
@@ -427,6 +690,51 @@ export function createContact(session: Session, leadId: string, payload: Contact
       method: "POST",
       body: JSON.stringify(payload),
     }
+  );
+}
+
+export function discoverContacts(session: Session, leadId: string, limit = 10) {
+  return requestJson<ContactRecord[]>(
+    session,
+    `/discovery/organizations/${session.organization_id}/leads/${leadId}/contacts/discover`,
+    {
+      method: "POST",
+      body: JSON.stringify({ limit }),
+    }
+  );
+}
+
+export function discoverDailyContacts(session: Session) {
+  return requestJson<DailyContactDiscoveryResult>(
+    session,
+    `/discovery/organizations/${session.organization_id}/contacts/discover-daily`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        timezone: "Asia/Shanghai",
+        lead_limit: 50,
+        contacts_per_lead: 10,
+      }),
+    }
+  );
+}
+
+export function discoverContactBatch(session: Session, leadIds: string[]) {
+  return requestJson<BatchContactDiscoveryResult>(
+    session,
+    `/discovery/organizations/${session.organization_id}/contacts/discover-batch`,
+    {
+      method: "POST",
+      body: JSON.stringify({ lead_ids: leadIds, contacts_per_lead: 10 }),
+    }
+  );
+}
+
+export function verifyContactEmail(session: Session, leadId: string, contactId: string) {
+  return requestJson<ContactRecord>(
+    session,
+    `/discovery/organizations/${session.organization_id}/leads/${leadId}/contacts/${contactId}/verify-email`,
+    { method: "POST" }
   );
 }
 
@@ -504,6 +812,17 @@ export function updateEmailDraft(
     {
       method: "PATCH",
       body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function updateDraftContactEmail(session: Session, draftId: string, email: string) {
+  return requestJson<EmailDraft>(
+    session,
+    `/discovery/organizations/${session.organization_id}/email-drafts/${draftId}/contact-email`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ email }),
     }
   );
 }
