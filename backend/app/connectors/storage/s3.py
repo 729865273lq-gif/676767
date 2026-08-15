@@ -38,12 +38,21 @@ class S3StorageConnector:
     async def put(self, key: str, content: bytes) -> None:
         await asyncio.to_thread(self._put_sync, key, content)
 
+    async def delete(self, key: str) -> None:
+        await asyncio.to_thread(self._delete_sync, key)
+
     def _put_sync(self, key: str, content: bytes) -> None:
         self._ensure_bucket()
         try:
             self._client.put_object(Bucket=self._bucket, Key=key, Body=content)
         except ClientError as error:
             raise StorageError("object storage write failed") from error
+
+    def _delete_sync(self, key: str) -> None:
+        try:
+            self._client.delete_object(Bucket=self._bucket, Key=key)
+        except ClientError as error:
+            raise StorageError("object storage delete failed") from error
 
     def _ensure_bucket(self) -> None:
         if self._bucket_ready:

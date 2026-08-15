@@ -12,10 +12,13 @@ from app.knowledge.models import KnowledgeChunk, KnowledgeDocument, KnowledgeDoc
 from app.knowledge.vector_store import EMBEDDING_DIM, PgVectorStore, VectorChunk
 from app.platform.models import Organization
 
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL")
 
 if not TEST_DATABASE_URL:
-    pytest.skip("TEST_DATABASE_URL not set; pgvector integration test skipped", allow_module_level=True)
+    pytest.skip(
+        "TEST_DATABASE_URL and DATABASE_URL not set; pgvector integration test skipped",
+        allow_module_level=True,
+    )
 
 
 def _embedding(seed: int) -> list[float]:

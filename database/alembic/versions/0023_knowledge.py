@@ -24,6 +24,8 @@ def upgrade() -> None:
         sa.Column("filename", sa.String(length=500), nullable=False),
         sa.Column("content_type", sa.String(length=200), nullable=False),
         sa.Column("size", sa.Integer(), nullable=False),
+        # Mirror of app.knowledge.models.KnowledgeDocumentStatus (StrEnum). The ORM maps this
+        # column with Enum(StrEnum, native_enum=False), which persists the member NAME (e.g. READY).
         sa.Column(
             "status",
             sa.Enum(
@@ -74,6 +76,7 @@ def upgrade() -> None:
 
     if op.get_bind().dialect.name == "postgresql":
         op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        # The vector(1024) dimension below must match app.knowledge.vector_store.EMBEDDING_DIM.
         op.execute(
             """
             CREATE TABLE knowledge_vectors (

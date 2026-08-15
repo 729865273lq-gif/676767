@@ -27,6 +27,10 @@ class VectorMatch:
     chunk_id: str
     document_id: str
     similarity: float
+    content: str = ""
+    document_filename: str = ""
+    page_or_sheet: str = ""
+    excerpt: str = ""
 
 
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
@@ -84,6 +88,7 @@ class PgVectorStore:
                 f"embedding dimension mismatch: got {len(record.embedding)}, expected {EMBEDDING_DIM}; "
                 "verify EMBEDDING_MODEL matches the knowledge_vectors column dimension"
             )
+        # The caller (IngestionService) owns the transaction and commits once at the end.
         self._session.execute(
             text(
                 """
@@ -100,7 +105,6 @@ class PgVectorStore:
                 "embedding": _vector_literal(record.embedding),
             },
         )
-        self._session.commit()
 
     async def search(
         self,
@@ -123,6 +127,8 @@ class PgVectorStore:
             text(
                 f"""
                 SELECT vector.chunk_id, chunk.document_id,
+                       chunk.content, document.filename AS document_filename,
+                       chunk.page_or_sheet, chunk.excerpt,
                        1 - (vector.embedding <=> CAST(:query AS vector)) AS similarity
                 FROM knowledge_vectors vector
                 JOIN knowledge_chunks chunk ON chunk.id = vector.chunk_id
@@ -137,7 +143,15 @@ class PgVectorStore:
             params,
         )
         return [
-            VectorMatch(chunk_id=row.chunk_id, document_id=row.document_id, similarity=row.similarity)
+            VectorMatch(
+                chunk_id=row.chunk_id,
+                document_id=row.document_id,
+                content=row.content,
+                document_filename=row.document_filename,
+                page_or_sheet=row.page_or_sheet,
+                excerpt=row.excerpt,
+                similarity=row.similarity,
+            )
             for row in rows
         ]
 

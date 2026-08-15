@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from io import BytesIO
 
+from app.connectors.llm import EmbeddingProviderError
+from app.connectors.storage import StorageError
 from app.knowledge.models import KnowledgeChunk, KnowledgeDocument, KnowledgeDocumentStatus
-from app.knowledge.vector_store import VectorChunk
+from app.knowledge.vector_store import EMBEDDING_DIM, VectorChunk
+
+logger = logging.getLogger(__name__)
 
 CHUNK_TOKENS = 512
 OVERLAP_TOKENS = 64
 CHARS_PER_TOKEN = 4
 EXCERPT_CHARS = 200
+EMBED_BATCH_SIZE = 32
+MAX_FILENAME_CHARS = 120
 
 PDF_CONTENT_TYPE = "application/pdf"
 DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -18,6 +25,18 @@ XLSX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml
 
 class EmbeddingNotConfiguredError(RuntimeError):
     """Raised when ingestion has no embedding connector to encode chunks."""
+
+
+class UnsupportedContentTypeError(ValueError):
+    """Raised when a document content type has no registered parser."""
+
+
+class DocumentParseError(ValueError):
+    """Raised when a document parser cannot extract content from the bytes."""
+
+
+class NoExtractableTextError(ValueError):
+    """Raised when a document parses successfully but yields no text."""
 
 
 @dataclass
@@ -32,6 +51,30 @@ class ChunkDraft:
     token_estimate: int
     page_or_sheet: str
     excerpt: str
+
+
+def sanitize_filename(filename: str) -> str:
+    name = (filename or "").replace("\\", "/").rsplit("/", 1)[-1].strip()
+    name = " ".join(name.split())
+    if len(name) > MAX_FILENAME_CHARS:
+        name = name[:MAX_FILENAME_CHARS].rstrip()
+    return name or "document"
+
+
+def _failure_message(error: Exception) -> str:
+    if isinstance(error, EmbeddingNotConfiguredError):
+        return "embedding provider is not configured"
+    if isinstance(error, EmbeddingProviderError):
+        return "embedding provider request failed"
+    if isinstance(error, StorageError):
+        return "file storage failed"
+    if isinstance(error, UnsupportedContentTypeError):
+        return "unsupported file type"
+    if isinstance(error, DocumentParseError):
+        return "document could not be parsed"
+    if isinstance(error, NoExtractableTextError):
+        return "no extractable text found in document"
+    return "ingestion failed unexpectedly"
 
 
 def parse_pdf(content: bytes) -> list[ParsedSection]:
@@ -128,7 +171,7 @@ class IngestionService:
     ) -> KnowledgeDocument:
         document = KnowledgeDocument(
             organization_id=organization_id,
-            filename=filename,
+            filename=sanitize_filename(filename),
             content_type=content_type,
             size=size,
             product_line_id=product_line_id,
@@ -144,31 +187,40 @@ class IngestionService:
         document.status = KnowledgeDocumentStatus.PROCESSING
         document.failure_message = ""
         self.session.commit()
+        storage_key = f"{document.organization_id}/{document.id}/{document.filename}"
         try:
-            await self._ingest(document, content)
+            # Ingestion is intentionally synchronous for V1: the request blocks until the
+            # document is READY or FAILED. The PROCESSING status is retained as the seam for
+            # a future background worker, which would persist it and offload this work.
+            await self._ingest(document, content, storage_key)
         except Exception as error:
+            logger.exception("knowledge document ingestion failed: %s", document_id)
             self.session.rollback()
+            await self._delete_stored_object(storage_key)
             document = self.session.get(KnowledgeDocument, document_id)
             document.status = KnowledgeDocumentStatus.FAILED
-            document.failure_message = str(error)
+            document.failure_message = _failure_message(error)
             self.session.commit()
         return document
 
-    async def _ingest(self, document: KnowledgeDocument, content: bytes) -> None:
+    async def _ingest(self, document: KnowledgeDocument, content: bytes, storage_key: str) -> None:
         parser = CONTENT_TYPE_PARSERS.get(document.content_type)
         if parser is None:
-            raise ValueError(f"unsupported content type: {document.content_type}")
+            raise UnsupportedContentTypeError(document.content_type)
         if self.embedding is None:
-            raise EmbeddingNotConfiguredError(
-                "embedding is not configured; set EMBEDDING_API_KEY before ingesting documents"
-            )
-        sections = parser(content)
+            raise EmbeddingNotConfiguredError()
+        try:
+            sections = parser(content)
+        except Exception as error:
+            raise DocumentParseError(document.content_type) from error
         chunks = chunk_sections(sections)
-        texts = [chunk.content for chunk in chunks]
-        embeddings = await self.embedding.embed(texts) if texts else []
+        if not chunks:
+            raise NoExtractableTextError()
+        embeddings = await self._embed_chunks([chunk.content for chunk in chunks])
 
-        key = f"{document.organization_id}/{document.id}/{document.filename}"
-        await self.storage.put(key, content)
+        # Store the original file first; the failure handler best-effort deletes it if
+        # anything after this point fails, before persisting the FAILED status.
+        await self.storage.put(storage_key, content)
 
         for index, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
             persisted = KnowledgeChunk(
@@ -195,3 +247,23 @@ class IngestionService:
         document.status = KnowledgeDocumentStatus.READY
         document.failure_message = ""
         self.session.commit()
+
+    async def _embed_chunks(self, texts: list[str]) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), EMBED_BATCH_SIZE):
+            batch = texts[start : start + EMBED_BATCH_SIZE]
+            for vector in await self.embedding.embed(batch):
+                if len(vector) != EMBEDDING_DIM:
+                    raise EmbeddingProviderError(
+                        f"embedding provider returned dimension {len(vector)}, expected {EMBEDDING_DIM}"
+                    )
+                vectors.append(vector)
+        if len(vectors) != len(texts):
+            raise EmbeddingProviderError("embedding provider returned an unexpected number of vectors")
+        return vectors
+
+    async def _delete_stored_object(self, key: str) -> None:
+        try:
+            await self.storage.delete(key)
+        except Exception:
+            logger.exception("failed to delete stored object after ingestion failure: %s", key)

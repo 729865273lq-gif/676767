@@ -65,6 +65,18 @@ NEVERBOUNCE_API_KEY=...
 
 Use the search-source panel to enable or disable customer search providers per workspace. OpenStreetMap is enabled by default for low-volume, user-triggered global business search and requires no API key. TomTom adds overseas POI results with public phone and website fields after `TOMTOM_API_KEY` is configured. Create a free key at `https://developer.tomtom.com/`, add it to `.env`, and restart the API. Bocha and Google Programmable Search cover public web results. Google Places remains optional. The public-contact scan reads mail, phone, WhatsApp, LinkedIn, Facebook, Instagram, TikTok, and other public links from a company's website, while Hunter can supplement named email contacts when configured. All outreach remains manual.
 
+## Knowledge Base
+
+The knowledge base stores per-workspace documents (PDF, DOCX, XLSX) as searchable chunks. Admins upload documents, and members search them with semantic similarity. Ingestion requires a configured OpenAI-compatible embedding provider:
+
+```powershell
+EMBEDDING_API_BASE=...
+EMBEDDING_API_KEY=...
+EMBEDDING_MODEL=BAAI/bge-m3
+```
+
+`EMBEDDING_MODEL` defaults to `BAAI/bge-m3`, which produces 1024-dimensional vectors. Uploaded files are stored in the MinIO bucket `foreign-trade`, while chunk text and vector embeddings are persisted in PostgreSQL (pgvector).
+
 ## Verification
 
 On Windows, run the component commands directly:

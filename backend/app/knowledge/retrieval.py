@@ -40,6 +40,21 @@ class RetrievalService:
         )
         results: list[RetrievalResult] = []
         for match in matches:
+            if match.document_filename and match.content:
+                # The pgvector store already joined the chunk/document and filtered by
+                # organization + ready status in SQL, so no extra per-match lookups are needed.
+                results.append(
+                    RetrievalResult(
+                        document_id=match.document_id,
+                        document_filename=match.document_filename,
+                        content=match.content,
+                        page_or_sheet=match.page_or_sheet,
+                        excerpt=match.excerpt,
+                        similarity=match.similarity,
+                    )
+                )
+                continue
+            # In-memory store: fill fields and enforce scope/status via the session.
             chunk = self.session.get(KnowledgeChunk, match.chunk_id)
             if chunk is None or chunk.organization_id != organization_id:
                 continue

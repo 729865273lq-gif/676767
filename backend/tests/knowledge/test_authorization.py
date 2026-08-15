@@ -10,9 +10,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.knowledge.vector_store import InMemoryVectorStore
+from app.knowledge.vector_store import EMBEDDING_DIM, InMemoryVectorStore
 from app.main import create_app
-from app.platform.models import MembershipRole, Organization, User, UserMembership
+from app.platform.models import MembershipRole, Organization, ProductLine, User, UserMembership
 from app.shared.config import Settings
 from app.shared.db import Base
 from app.shared.security import PrincipalTokenCodec
@@ -27,7 +27,7 @@ class FakeEmbeddingConnector:
     version = "v1"
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[1.0, 0.0, 0.0] for _ in texts]
+        return [[1.0] * EMBEDDING_DIM for _ in texts]
 
 
 class FakeStorageConnector:
@@ -182,3 +182,22 @@ def test_cross_org_knowledge_access_is_rejected() -> None:
     assert listed.status_code == 403
     assert searched.status_code == 403
     assert uploaded.status_code == 403
+
+
+def test_search_rejects_foreign_product_line_id() -> None:
+    client, factory = configured_client()
+    upload = upload_document(client, client.acme_id, client.admin_id)  # type: ignore[attr-defined]
+    assert upload.status_code == 201
+
+    with factory.begin() as session:
+        foreign = ProductLine(organization_id=client.globex_id, name="Globex Line")  # type: ignore[attr-defined]
+        session.add(foreign)
+        session.flush()
+        foreign_id = foreign.id
+
+    response = client.get(
+        f"/knowledge/organizations/{client.acme_id}/search?query=alpha&product_line_id={foreign_id}",  # type: ignore[attr-defined]
+        headers=bearer_headers(client.member_id),  # type: ignore[attr-defined]
+    )
+
+    assert response.status_code == 404

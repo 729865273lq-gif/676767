@@ -9,5 +9,7 @@ from app.connectors.storage.s3 import S3StorageConnector, StorageError
 class StorageConnector(Connector, Protocol):
     async def put(self, key: str, content: bytes) -> None: ...
 
+    async def delete(self, key: str) -> None: ...
+
 
 __all__ = ["S3StorageConnector", "StorageConnector", "StorageError"]

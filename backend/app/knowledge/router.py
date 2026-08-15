@@ -18,6 +18,8 @@ from app.shared.security import SignedPrincipal
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
+MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024
+
 
 def _require_admin(principal: SignedPrincipal, organization_id: str, session: Session) -> None:
     try:
@@ -94,7 +96,26 @@ async def upload_document(
         except ProductLineNotFound as error:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 
+    # Reject oversized uploads from the declared Content-Length before reading the body.
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_size = int(content_length)
+        except ValueError:
+            declared_size = None
+        if declared_size is not None and declared_size > MAX_UPLOAD_SIZE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                detail="file exceeds the 25 MB upload limit",
+            )
+
     content = await file.read()
+    # Guard against a missing or understated Content-Length as well.
+    if len(content) > MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+            detail="file exceeds the 25 MB upload limit",
+        )
     filename = (file.filename or "document").strip()
     content_type = (file.content_type or "").strip() or "application/octet-stream"
     service = IngestionService(
@@ -138,6 +159,12 @@ async def search_documents(
     session: Session = Depends(get_session),
 ) -> list[dict[str, object]]:
     _require_membership(principal, organization_id, session)
+    normalized_product_line_id = (product_line_id or "").strip() or None
+    if normalized_product_line_id is not None:
+        try:
+            ProductLineService(session).get_product_line(normalized_product_line_id, organization_id)
+        except ProductLineNotFound as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
     embedding = _embedding_connector(request)
     if embedding is None:
         raise HTTPException(
@@ -148,7 +175,7 @@ async def search_documents(
         organization_id,
         query,
         limit=limit,
-        product_line_id=product_line_id,
+        product_line_id=normalized_product_line_id,
     )
     return [
         {

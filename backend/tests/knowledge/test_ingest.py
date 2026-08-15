@@ -7,6 +7,7 @@ from docx import Document
 from openpyxl import Workbook
 from sqlalchemy import select
 
+from app.connectors.llm import EmbeddingProviderError
 from app.knowledge.ingest import (
     IngestionService,
     ParsedSection,
@@ -14,24 +15,28 @@ from app.knowledge.ingest import (
     parse_docx,
     parse_pdf,
     parse_xlsx,
+    sanitize_filename,
 )
 from app.knowledge.models import KnowledgeChunk, KnowledgeDocumentStatus
-from app.knowledge.vector_store import InMemoryVectorStore
+from app.knowledge.vector_store import EMBEDDING_DIM, InMemoryVectorStore
 
 
 class FakeEmbeddingConnector:
     connector_id = "fake-embedding"
     version = "v1"
 
-    def __init__(self, fail_with=None):
+    def __init__(self, fail_with=None, fail_after_calls=None):
         self.fail_with = fail_with
+        self.fail_after_calls = fail_after_calls
         self.calls: list[list[str]] = []
 
     async def embed(self, texts):
         self.calls.append(list(texts))
-        if self.fail_with is not None:
+        if self.fail_with is not None and (
+            self.fail_after_calls is None or len(self.calls) > self.fail_after_calls
+        ):
             raise self.fail_with
-        return [[float(len(text))] for text in texts]
+        return [[1.0] * EMBEDDING_DIM for _ in texts]
 
 
 class FakeStorageConnector:
@@ -46,6 +51,9 @@ class FakeStorageConnector:
 
     async def get(self, key):
         return self.objects[key]
+
+    async def delete(self, key):
+        self.objects.pop(key, None)
 
 
 def docx_bytes(text: str) -> bytes:
@@ -156,7 +164,10 @@ def test_process_fails_when_embedding_is_missing(session, organizations):
 
 
 def test_process_marks_failed_when_embedding_raises(session, organizations):
-    service = make_service(session, embedding=FakeEmbeddingConnector(fail_with=RuntimeError("provider down")))
+    service = make_service(
+        session,
+        embedding=FakeEmbeddingConnector(fail_with=EmbeddingProviderError("provider down")),
+    )
     document = create_document(
         service,
         organizations["acme"].id,
@@ -166,7 +177,56 @@ def test_process_marks_failed_when_embedding_raises(session, organizations):
     result = asyncio.run(service.process(document.id, organizations["acme"].id, docx_bytes("alpha")))
 
     assert result.status is KnowledgeDocumentStatus.FAILED
-    assert result.failure_message == "provider down"
+    assert result.failure_message == "embedding provider request failed"
+
+
+def test_process_rolls_back_chunks_and_vectors_when_embedding_raises_mid_way(session, organizations):
+    vector_store = InMemoryVectorStore()
+    embedding = FakeEmbeddingConnector(
+        fail_with=EmbeddingProviderError("provider down"),
+        fail_after_calls=1,
+    )
+    service = make_service(session, embedding=embedding, vector_store=vector_store)
+    document = create_document(
+        service,
+        organizations["acme"].id,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    result = asyncio.run(
+        service.process(
+            document.id,
+            organizations["acme"].id,
+            docx_bytes("alpha beta " * 10_000),
+        )
+    )
+
+    assert result.status is KnowledgeDocumentStatus.FAILED
+    assert result.failure_message == "embedding provider request failed"
+    assert len(embedding.calls) > 1
+    chunks = list(
+        session.scalars(select(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id))
+    )
+    assert chunks == []
+    assert vector_store._records == {}
+
+
+def test_process_fails_when_parsed_text_is_empty(session, organizations):
+    service = make_service(session, embedding=FakeEmbeddingConnector())
+    document = create_document(
+        service,
+        organizations["acme"].id,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    result = asyncio.run(service.process(document.id, organizations["acme"].id, docx_bytes("")))
+
+    assert result.status is KnowledgeDocumentStatus.FAILED
+    assert result.failure_message == "no extractable text found in document"
+    chunks = list(
+        session.scalars(select(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id))
+    )
+    assert chunks == []
 
 
 def test_process_fails_on_unsupported_content_type(session, organizations):
@@ -211,3 +271,10 @@ def test_chunk_sections_splits_with_overlap():
     assert len(chunks) > 1
     assert all(chunk.token_estimate > 0 for chunk in chunks)
     assert chunks[0].page_or_sheet == "page 1"
+
+
+def test_sanitize_filename_strips_paths_and_collapses_whitespace():
+    assert sanitize_filename(r"C:\reports\Q3  report.docx") == "Q3 report.docx"
+    assert sanitize_filename("inbox/spec.pdf") == "spec.pdf"
+    assert sanitize_filename("   ") == "document"
+    assert sanitize_filename("x" * 300) == "x" * 120
