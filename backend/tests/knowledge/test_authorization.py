@@ -40,6 +40,9 @@ class FakeStorageConnector:
     async def put(self, key: str, content: bytes) -> None:
         self.objects[key] = content
 
+    async def delete(self, key: str) -> None:
+        self.objects.pop(key, None)
+
 
 def docx_bytes(text: str) -> bytes:
     document = Document()

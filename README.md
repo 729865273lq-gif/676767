@@ -75,7 +75,7 @@ EMBEDDING_API_KEY=...
 EMBEDDING_MODEL=BAAI/bge-m3
 ```
 
-`EMBEDDING_MODEL` defaults to `BAAI/bge-m3`, which produces 1024-dimensional vectors. Uploaded files are stored in the MinIO bucket `foreign-trade`, while chunk text and vector embeddings are persisted in PostgreSQL (pgvector).
+`EMBEDDING_MODEL` defaults to `BAAI/bge-m3`, which produces 1024-dimensional vectors. Any OpenAI-compatible provider works for these three settings; a free option is SiliconFlow, which serves `BAAI/bge-m3`. Uploaded files are stored in the MinIO bucket `foreign-trade`, while chunk text and vector embeddings are persisted in PostgreSQL (pgvector).
 
 ## Verification
 

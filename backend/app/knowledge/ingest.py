@@ -208,7 +208,9 @@ class IngestionService:
         if parser is None:
             raise UnsupportedContentTypeError(document.content_type)
         if self.embedding is None:
-            raise EmbeddingNotConfiguredError()
+            raise EmbeddingNotConfiguredError(
+                "embedding provider is not configured; set EMBEDDING_API_KEY in .env"
+            )
         try:
             sections = parser(content)
         except Exception as error:

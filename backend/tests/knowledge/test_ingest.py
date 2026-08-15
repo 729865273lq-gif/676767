@@ -56,6 +56,25 @@ class FakeStorageConnector:
         self.objects.pop(key, None)
 
 
+class RaisingVectorStore:
+    """Wraps InMemoryVectorStore and raises on a configurable upsert call."""
+
+    def __init__(self, raise_on_upsert: int = 1):
+        self._wrapped = InMemoryVectorStore()
+        self._raise_on_upsert = raise_on_upsert
+        self.upsert_calls = 0
+
+    @property
+    def records(self):
+        return self._wrapped._records
+
+    async def upsert(self, record):
+        self.upsert_calls += 1
+        if self.upsert_calls == self._raise_on_upsert:
+            raise RuntimeError("vector store failure")
+        await self._wrapped.upsert(record)
+
+
 def docx_bytes(text: str) -> bytes:
     document = Document()
     document.add_paragraph(text)
@@ -180,7 +199,7 @@ def test_process_marks_failed_when_embedding_raises(session, organizations):
     assert result.failure_message == "embedding provider request failed"
 
 
-def test_process_rolls_back_chunks_and_vectors_when_embedding_raises_mid_way(session, organizations):
+def test_process_batches_embeddings_across_multiple_calls(session, organizations):
     vector_store = InMemoryVectorStore()
     embedding = FakeEmbeddingConnector(
         fail_with=EmbeddingProviderError("provider down"),
@@ -209,6 +228,35 @@ def test_process_rolls_back_chunks_and_vectors_when_embedding_raises_mid_way(ses
     )
     assert chunks == []
     assert vector_store._records == {}
+
+
+def test_process_rolls_back_chunks_and_vectors_when_upsert_fails_mid_way(session, organizations):
+    vector_store = RaisingVectorStore(raise_on_upsert=1)
+    service = make_service(session, embedding=FakeEmbeddingConnector(), vector_store=vector_store)
+    document = create_document(
+        service,
+        organizations["acme"].id,
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
+
+    # _ingest flushes each chunk before upserting its vector, so failing on the first upsert
+    # forces process() to roll back an already-flushed chunk. Query the session directly to
+    # confirm nothing persisted, and that the vector store retains no records.
+    result = asyncio.run(
+        service.process(
+            document.id,
+            organizations["acme"].id,
+            docx_bytes("alpha beta " * 400),
+        )
+    )
+
+    assert result.status is KnowledgeDocumentStatus.FAILED
+    assert vector_store.upsert_calls == 1
+    chunks = list(
+        session.scalars(select(KnowledgeChunk).where(KnowledgeChunk.document_id == document.id))
+    )
+    assert chunks == []
+    assert vector_store.records == {}
 
 
 def test_process_fails_when_parsed_text_is_empty(session, organizations):
