@@ -145,7 +145,13 @@ class OpenAICompatibleChatConnector:
             raise ChatProviderError("chat provider returned an invalid response") from error
         return _normalize_intent_token(str(content)) or None
 
+    def close(self) -> None:
+        """Release the shared httpx client."""
+        self._client.close()
+
 
 def _normalize_intent_token(content: str) -> str:
-    # Lowercase and strip punctuation so "Interested." or "interested\n" match the enum.
-    return re.sub(r"[^a-z_]", "", content.lower())
+    # Lowercase, map spaces to underscores (so "not interested" -> "not_interested"), and
+    # strip punctuation so "Interested." or "interested\n" match the enum.
+    normalized = content.lower().replace(" ", "_")
+    return re.sub(r"[^a-z_]", "", normalized)

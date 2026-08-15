@@ -32,6 +32,13 @@ from app.platform.models import ProductLine, utcnow
 from app.workflow.models import WorkflowRun, WorkflowState
 
 
+def _backfill_inbox_for_lead(session: Session, organization_id: str, lead: Lead) -> None:
+    # Deferred import avoids a module-load cycle (app.crm.inbox imports app.crm.service).
+    from app.crm.inbox import InboxService
+
+    InboxService(session).backfill_for_lead(organization_id, lead)
+
+
 class LeadService:
     def __init__(self, session: Session):
         self.session = session
@@ -90,6 +97,7 @@ class LeadService:
             )
         )
         self.session.flush()
+        _backfill_inbox_for_lead(self.session, organization_id, lead)
         return lead
 
     def _upsert_public_contact_from_search(
@@ -209,6 +217,7 @@ class LeadService:
             )
         )
         self.session.flush()
+        _backfill_inbox_for_lead(self.session, organization_id, lead)
         return lead
 
     def list_leads(

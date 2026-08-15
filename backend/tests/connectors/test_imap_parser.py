@@ -142,6 +142,7 @@ def _chat_connector(handler) -> OpenAICompatibleChatConnector:
     connector = OpenAICompatibleChatConnector(
         base_url="https://example.com", api_key="k", model="m"
     )
+    connector.close()  # release the default client before swapping in the mock transport
     connector._client = httpx.Client(transport=httpx.MockTransport(handler))  # noqa: SLF001
     return connector
 

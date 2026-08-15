@@ -341,7 +341,7 @@ class InboundMessage(Base):
     # body_text is normalized to plain text by the IMAP connector (see
     # app.connectors.email.imap). The frontend must render it as text, never as HTML.
     body_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
-    attachments_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    attachments_count: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     intent: Mapped[str] = mapped_column(String(30), default="other", nullable=False, index=True)
     intent_confidence: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)

@@ -288,7 +288,7 @@ class InboxService:
         # fetch is simply re-read next poll (idempotent) rather than silently skipped.
         latest = self.imap_connector.latest_uid(mailbox)
         records = self.imap_connector.list_since_uid(mailbox, last_uid)
-        single_tenant = _is_single_tenant(self.session, organization_id)
+        single_tenant = _is_single_polled_org(self.session, organization_id)
         new_count = 0
         for record in records:
             try:
@@ -365,12 +365,60 @@ class InboxService:
         return True
 
     def _backfill_association(self, organization_id: str, message: InboundMessage) -> None:
-        """Link an already-stored message once a matching lead finally exists."""
+        """Link an already-stored message once a matching lead finally exists (sync path)."""
         if message.lead_id is not None:
             return
         lead = self._match_lead(organization_id, message.sender_email)
         if lead is None:
             return
+        self._link_message(organization_id, lead, message)
+
+    def backfill_for_lead(self, organization_id: str, lead: Lead) -> int:
+        """Link stored unlinked messages that match a newly created or updated lead.
+
+        Called from the CRM lead-creation path (not the sync path), so a reply that arrived
+        before its lead existed is associated as soon as the lead is persisted. Runs within
+        the caller's transaction and only flushes; the caller commits once.
+        """
+        has_unlinked = self.session.scalar(
+            select(InboundMessage.id)
+            .where(
+                InboundMessage.organization_id == organization_id,
+                InboundMessage.lead_id.is_(None),
+            )
+            .limit(1)
+        )
+        if has_unlinked is None:
+            return 0
+        contact_emails = {
+            contact.email.strip().casefold()
+            for contact in self.session.scalars(
+                select(CRMContact).where(
+                    CRMContact.organization_id == organization_id,
+                    CRMContact.lead_id == lead.id,
+                )
+            )
+            if contact.email.strip()
+        }
+        unlinked = list(
+            self.session.scalars(
+                select(InboundMessage).where(
+                    InboundMessage.organization_id == organization_id,
+                    InboundMessage.lead_id.is_(None),
+                )
+            )
+        )
+        matched = 0
+        for message in unlinked:
+            if not _lead_matches_sender(lead, contact_emails, message.sender_email):
+                continue
+            self._link_message(organization_id, lead, message)
+            matched += 1
+        if matched:
+            self.session.flush()
+        return matched
+
+    def _link_message(self, organization_id: str, lead: Lead, message: InboundMessage) -> None:
         message.lead_id = lead.id
         if message.follow_up_task_id is None:
             self._append_timeline(organization_id, lead, message)
@@ -560,6 +608,14 @@ def _canonical_domain_for_email(email: str) -> str | None:
         return None
 
 
+def _lead_matches_sender(lead: Lead, contact_emails: set[str], sender_email: str) -> bool:
+    email = (sender_email or "").strip().lower()
+    if email and email in contact_emails:
+        return True
+    domain = _canonical_domain_for_email(email)
+    return domain is not None and domain == lead.canonical_domain
+
+
 def poll_organization_ids(session: Session) -> list[str]:
     """Organization ids that should be polled: any org with a lead or an inbox cursor."""
     return list(
@@ -569,13 +625,16 @@ def poll_organization_ids(session: Session) -> list[str]:
     )
 
 
-def _is_single_tenant(session: Session, organization_id: str) -> bool:
+def _is_single_polled_org(session: Session, organization_id: str) -> bool:
     """True when ``organization_id`` is the only org with a lead or mailbox cursor.
 
     The inbox reads one shared IMAP mailbox. Storing every message under every org would
     duplicate content and leak one org's replies into another. The supported V1 pilot is a
-    single tenant, so unmatched messages are stored only on that sole org; in a multi-org
-    setup unmatched messages are skipped until a matching lead exists.
+    single tenant, so unmatched messages are stored only on that sole org.
+
+    In a multi-org setup an unmatched message is skipped and never stored, so it cannot be
+    backfilled later when a matching lead appears. Recovering such a message requires a
+    manual full re-sync (e.g. clearing the mailbox cursor row so the mailbox is read again).
     """
     polled = poll_organization_ids(session)
     return organization_id in polled and len(polled) == 1

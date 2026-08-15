@@ -22,6 +22,7 @@ from app.crm.models import (
     LeadBucket,
     MailboxCursor,
 )
+from app.crm.service import LeadService
 from app.main import create_app
 from app.platform.models import MembershipRole, Organization, ProductLine, User, UserMembership
 from app.shared.config import Settings
@@ -411,6 +412,54 @@ def test_multi_org_skips_unmatched_reply(session, organizations) -> None:
 
     assert synced == 0
     assert session.scalar(select(func.count()).select_from(InboundMessage)) == 0
+
+
+def test_lead_creation_backfills_unlinked_reply(session, organizations) -> None:
+    organization = organizations["acme"]
+    # Acme is the sole tenant with an unrelated lead, so the reply is stored unlinked.
+    _make_lead(
+        session, organization, domain="existing.example", contact_email="buyer@existing.example"
+    )
+    imap = FakeImapConnector(
+        {
+            1: make_record(
+                "msg-1", "Re: Offer", "We are interested.", sender_email="new@newco.example"
+            )
+        }
+    )
+    InboxService(session, imap).sync_organization_mailbox(organization.id)
+    message = session.scalar(
+        select(InboundMessage).where(InboundMessage.provider_message_id == "msg-1")
+    )
+    assert message is not None
+    assert message.lead_id is None
+    assert message.follow_up_task_id is None
+
+    product_line = ProductLine(organization_id=organization.id, name="NewCo Line")
+    session.add(product_line)
+    session.flush()
+
+    lead = LeadService(session).create_manual_lead(
+        organization_id=organization.id,
+        product_line_id=product_line.id,
+        product_item_id=None,
+        product_item_name="",
+        company_name="NewCo",
+        website="https://newco.example",
+        target_market="US",
+        buyer_profile=None,
+        notes="",
+        actor_user_id="actor",
+    )
+    session.commit()
+
+    session.refresh(message)
+    assert message.lead_id == lead.id
+    assert message.follow_up_task_id is not None
+    timeline = session.scalars(
+        select(FollowUpRecord).where(FollowUpRecord.lead_id == lead.id)
+    ).all()
+    assert any(record.activity_type == "reply_analyzed" for record in timeline)
 
 
 def bearer_headers(user_id: str) -> dict[str, str]:

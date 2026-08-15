@@ -174,8 +174,9 @@ class ImapConnector:
     def _fetch_record(self, imap: imaplib.IMAP4, uid: int) -> InboundEmailRecord | None:
         status, data = imap.uid("fetch", str(uid), "(RFC822)")
         if status != "OK":
-            # Transient fetch failure: log it so it is visible; the message stays below
-            # the next high-water mark and is retried on a subsequent poll.
+            # Transient fetch failure: log it. The cursor high-water mark was captured
+            # before this fetch, so a message that fails here is NOT re-read on the next
+            # poll; it is skipped until a manual full re-sync (e.g. clearing the cursor).
             logger.warning("IMAP fetch failed for UID %s", uid)
             return None
         raw = _first_message_bytes(data)

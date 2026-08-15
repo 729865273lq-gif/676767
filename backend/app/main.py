@@ -104,6 +104,9 @@ async def lifespan(app: FastAPI):
                 await poll_task
             except asyncio.CancelledError:
                 pass
+        llm_connector = getattr(app.state, "llm_connector", None)
+        if llm_connector is not None and hasattr(llm_connector, "close"):
+            llm_connector.close()
 
 
 def create_app(
