@@ -444,6 +444,47 @@ export type KnowledgeDocument = {
   updated_at: string;
 };
 
+export type InboxIntent = "interested" | "question" | "not_now" | "not_interested" | "out_of_office" | "other";
+
+export type InboxMessageListItem = {
+  id: string;
+  provider_message_id: string;
+  sender_email: string;
+  sender_name: string;
+  subject: string;
+  received_at: string;
+  intent: string;
+  intent_confidence: number;
+  suggested_reply: string;
+  follow_up_task_id: string | null;
+  due_at: string | null;
+  created_at: string;
+};
+
+export type InboxMessageDetail = InboxMessageListItem & {
+  thread_id: string;
+  body_text: string;
+  analysis_rationale: string;
+  linked_company_name: string | null;
+};
+
+export type InboxSyncResult = {
+  organization_id: string;
+  synced: number;
+};
+
+export type InboxFollowUpDoneResult = {
+  message_id: string;
+  follow_up_status: string;
+};
+
+export type InboxListQuery = {
+  intent?: InboxIntent;
+  has_follow_up?: boolean;
+  due_from?: string;
+  due_before?: string;
+};
+
 export class ApiError extends Error {
   constructor(message: string, readonly status: number) {
     super(message);
@@ -937,4 +978,40 @@ export async function uploadKnowledgeDocument(
     throw new ApiError(detail, response.status);
   }
   return data as KnowledgeDocument;
+}
+
+export function listInboxMessages(session: Session, query: InboxListQuery = {}) {
+  const params = new URLSearchParams();
+  if (query.intent) params.set("intent", query.intent);
+  if (query.has_follow_up != null) params.set("has_follow_up", String(query.has_follow_up));
+  if (query.due_from) params.set("due_from", query.due_from);
+  if (query.due_before) params.set("due_before", query.due_before);
+  const qs = params.toString();
+  return requestJson<InboxMessageListItem[]>(
+    session,
+    `/organizations/${session.organization_id}/inbox${qs ? `?${qs}` : ""}`
+  );
+}
+
+export function getInboxMessage(session: Session, messageId: string) {
+  return requestJson<InboxMessageDetail>(
+    session,
+    `/organizations/${session.organization_id}/inbox/${messageId}`
+  );
+}
+
+export function syncInbox(session: Session) {
+  return requestJson<InboxSyncResult>(
+    session,
+    `/organizations/${session.organization_id}/inbox/sync`,
+    { method: "POST" }
+  );
+}
+
+export function markInboxFollowUpDone(session: Session, messageId: string) {
+  return requestJson<InboxFollowUpDoneResult>(
+    session,
+    `/organizations/${session.organization_id}/inbox/${messageId}/follow-up/done`,
+    { method: "POST" }
+  );
 }

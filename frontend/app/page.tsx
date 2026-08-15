@@ -23,8 +23,10 @@ import {
   getCustomerDevelopmentConnectors,
   getEmailDeliveryStatus,
   getEmailDraft,
+  getInboxMessage,
   getPublicProductCatalogUrl,
   listEmailDrafts,
+  listInboxMessages,
   listFollowUpTasks,
   listFollowUps,
   listKnowledgeDocuments,
@@ -33,10 +35,12 @@ import {
   listSearchSources,
   listWebsiteInquiries,
   markEmailDraftSent,
+  markInboxFollowUpDone,
   markQuoteDraftSent,
   reviewEmailDraft,
   resolveAdministrativeLocation,
   startDiscovery,
+  syncInbox,
   updateEmailDraft,
   updateDraftContactEmail,
   updateLeadDetail,
@@ -51,6 +55,10 @@ import {
   type DiscoveryRun,
   type EmailDeliveryStatus,
   type EmailDraft,
+  type InboxIntent,
+  type InboxListQuery,
+  type InboxMessageDetail,
+  type InboxMessageListItem,
   type KnowledgeDocument,
   type KnowledgeDocumentStatus,
   type FollowUpRecord,
@@ -1807,44 +1815,312 @@ function FollowUpTimeline({
   );
 }
 
+const inboxIntentLabel: Record<string, string> = {
+  interested: "有兴趣",
+  question: "询价",
+  not_now: "暂缓",
+  not_interested: "已拒绝",
+  out_of_office: "自动回复",
+  other: "其他",
+};
+
+function inboxIntentLabelFor(intent: string) {
+  return inboxIntentLabel[intent] ?? intent;
+}
+
+function inboxIntentBadgeClass(intent: string) {
+  if (intent === "interested") return "status statusIntentInterest";
+  if (intent === "question") return "status statusPriority";
+  if (intent === "not_now") return "status statusResearch";
+  if (intent === "not_interested") return "status statusIntentNotInterested";
+  if (intent === "out_of_office") return "status statusIntentOutOfOffice";
+  return "status statusQualified";
+}
+
+function inboxDateStart(day: string) {
+  return new Date(`${day}T00:00:00Z`).toISOString();
+}
+
+function inboxDateNextDay(day: string) {
+  const date = new Date(`${day}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString();
+}
+
+function inboxDueInDays(dueAt: string | null): number | null {
+  if (!dueAt) return null;
+  const due = new Date(dueAt);
+  if (Number.isNaN(due.getTime())) return null;
+  const now = new Date();
+  const dueDay = Date.UTC(due.getUTCFullYear(), due.getUTCMonth(), due.getUTCDate());
+  const nowDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return Math.round((dueDay - nowDay) / 86400000);
+}
+
+function inboxDueLabel(dueAt: string | null) {
+  const days = inboxDueInDays(dueAt);
+  if (days === null) return "";
+  if (days > 1) return `${days} 天后到期`;
+  if (days === 1) return "明天到期";
+  if (days === 0) return "今天到期";
+  if (days === -1) return "昨天已到期";
+  return `已逾期 ${Math.abs(days)} 天`;
+}
+
 function InboxPanel({
-  records,
+  messages,
   loading,
+  error,
+  intentFilter,
+  followUpOnly,
+  dueFrom,
+  dueBefore,
+  isAdmin,
+  syncing,
+  syncFeedback,
+  completedIds,
+  onIntentFilterChange,
+  onFollowUpOnlyChange,
+  onDueFromChange,
+  onDueBeforeChange,
   onRefresh,
+  onSync,
+  onOpenMessage,
 }: {
-  records: FollowUpRecord[];
+  messages: InboxMessageListItem[];
   loading: boolean;
+  error: string;
+  intentFilter: InboxIntent | "all";
+  followUpOnly: boolean;
+  dueFrom: string;
+  dueBefore: string;
+  isAdmin: boolean;
+  syncing: boolean;
+  syncFeedback: string;
+  completedIds: string[];
+  onIntentFilterChange: (intent: InboxIntent | "all") => void;
+  onFollowUpOnlyChange: (followUpOnly: boolean) => void;
+  onDueFromChange: (dueFrom: string) => void;
+  onDueBeforeChange: (dueBefore: string) => void;
   onRefresh: () => void;
+  onSync: () => void;
+  onOpenMessage: (messageId: string) => void;
 }) {
-  const replies = records.filter((record) => record.activity_type === "reply");
+  const pendingCount = messages.filter(
+    (message) => message.follow_up_task_id && !completedIds.includes(message.id)
+  ).length;
   return (
-    <section className="timelinePanel" aria-labelledby="inbox-title">
-      <div className="sectionHeader compact">
+    <section className="inquiryPanel" aria-labelledby="inbox-title">
+      <div className="sectionHeader">
         <div>
-          <p className="sectionLabel">收件箱</p>
-          <h2 id="inbox-title">客户回复</h2>
+          <p className="sectionLabel">邮件跟进</p>
+          <h2 id="inbox-title">收件箱</h2>
         </div>
-        <button className="iconTextButton" type="button" onClick={onRefresh}>刷新</button>
+        <div className="tableActions">
+          <label className="inlineFilter">
+            意向
+            <select
+              value={intentFilter}
+              onChange={(event) => onIntentFilterChange(event.currentTarget.value as InboxIntent | "all")}
+            >
+              <option value="all">全部</option>
+              <option value="interested">有兴趣</option>
+              <option value="question">询价</option>
+              <option value="not_now">暂缓</option>
+              <option value="not_interested">已拒绝</option>
+              <option value="out_of_office">自动回复</option>
+              <option value="other">其他</option>
+            </select>
+          </label>
+          <label className="switchField">
+            <input
+              type="checkbox"
+              checked={followUpOnly}
+              onChange={(event) => onFollowUpOnlyChange(event.currentTarget.checked)}
+            />
+            仅看待跟进
+          </label>
+          <label className="inlineFilter">
+            到期
+            <input
+              type="date"
+              value={dueFrom}
+              onChange={(event) => onDueFromChange(event.currentTarget.value)}
+            />
+          </label>
+          <span className="inlineFilter">至</span>
+          <label className="inlineFilter">
+            <input
+              type="date"
+              value={dueBefore}
+              onChange={(event) => onDueBeforeChange(event.currentTarget.value)}
+            />
+          </label>
+          <button className="textButton" type="button" onClick={onRefresh}>刷新</button>
+          {isAdmin && (
+            <button className="outlineButton" type="button" disabled={syncing} onClick={onSync}>
+              {syncing ? "同步中..." : "立即同步"}
+            </button>
+          )}
+        </div>
+      </div>
+      {syncFeedback ? (
+        <div
+          className={syncFeedback.startsWith("同步完成") ? "inboxNotice inboxNoticeSuccess" : "inboxNotice inboxNoticeError"}
+          role="status"
+        >
+          {syncFeedback}
+        </div>
+      ) : null}
+      <div className="inquirySummary">
+        <strong>{pendingCount}</strong>
+        <span>条待跟进回复。配置 IMAP 收件箱后，客户回复会在同步后进入这里，由 AI 分析意向并给出建议回复。</span>
       </div>
       {loading ? (
-        <div className="emptyState">正在加载客户回复...</div>
-      ) : replies.length === 0 ? (
-        <div className="emptyState">暂无客户回复。你可以在客户详情页把回复内容记录为“客户回复”。</div>
+        <div className="emptyState inquiryEmpty">正在加载收件箱...</div>
+      ) : error ? (
+        <div className="emptyState inquiryEmpty" role="alert">{error}</div>
+      ) : messages.length === 0 ? (
+        <div className="emptyState inquiryEmpty">
+          暂无邮件回复。配置 IMAP 收件箱后，客户回复会在同步后显示在这里（管理员可点击“立即同步”手动拉取）。
+        </div>
       ) : (
-        <div className="inboxList" aria-label="客户回复列表">
-          {replies.slice(0, 5).map((record) => (
-            <article className="inboxItem" key={record.id}>
-              <div>
-                <strong>{record.lead_company_name ?? "客户"}</strong>
-                <time>{formatDateTime(record.created_at)}</time>
-              </div>
-              <p>{record.content}</p>
-              <small>{record.lead_status ? leadStatusLabel[record.lead_status] : "未同步状态"}</small>
-            </article>
-          ))}
+        <div className="inquiryList" aria-label="收件箱列表">
+          {messages.map((message) => {
+            const done = completedIds.includes(message.id);
+            const hasFollowUp = Boolean(message.follow_up_task_id);
+            return (
+              <article className="inquiryItem inboxMessageItem" key={message.id}>
+                <div className="inquiryMain">
+                  <div>
+                    <strong>{message.sender_name || message.sender_email}</strong>
+                    <span>{message.sender_email}</span>
+                    <span className="inboxSubject">{message.subject || "（无主题）"}</span>
+                  </div>
+                  <div className="inboxBadges">
+                    <span className={inboxIntentBadgeClass(message.intent)}>
+                      {inboxIntentLabelFor(message.intent)} {Math.round(message.intent_confidence * 100)}%
+                    </span>
+                    {done ? (
+                      <span className="status statusIntentInterest">已完成</span>
+                    ) : hasFollowUp ? (
+                      <span className="status statusResearch">待跟进</span>
+                    ) : (
+                      <span className="status statusQualified">无需跟进</span>
+                    )}
+                  </div>
+                </div>
+                <div className="inquiryMeta">
+                  <span>收到：{formatDateTime(message.received_at)}</span>
+                  {hasFollowUp && !done && message.due_at ? <span>{inboxDueLabel(message.due_at)}</span> : null}
+                </div>
+                <div className="inquiryActions">
+                  <button className="textButton" type="button" onClick={() => onOpenMessage(message.id)}>
+                    查看详情
+                  </button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
+  );
+}
+
+function InboxMessageDrawer({
+  open,
+  detail,
+  loading,
+  completed,
+  completing,
+  onClose,
+  onMarkDone,
+}: {
+  open: boolean;
+  detail: InboxMessageDetail | null;
+  loading: boolean;
+  completed: boolean;
+  completing: boolean;
+  onClose: () => void;
+  onMarkDone: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  if (!open) return null;
+
+  async function copyReply() {
+    if (!detail) return;
+    try {
+      await navigator.clipboard.writeText(detail.suggested_reply);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <div className="drawerBackdrop" role="presentation" onMouseDown={onClose}>
+      <aside className="customerDrawer" aria-label="收件箱详情" onMouseDown={(event) => event.stopPropagation()}>
+        <div className="drawerHeader">
+          <div><p className="sectionLabel">邮件跟进</p><h2>邮件详情</h2></div>
+          <button className="closeButton" type="button" aria-label="关闭邮件详情" onClick={onClose}>x</button>
+        </div>
+        {loading ? (
+          <div className="emptyState drawerLoading">正在加载邮件...</div>
+        ) : !detail ? (
+          <div className="emptyState drawerLoading">未找到该邮件。</div>
+        ) : (
+          <div className="inboxDetailContent">
+            <article className="draftCard">
+              <div className="inboxBadges">
+                <span className={inboxIntentBadgeClass(detail.intent)}>
+                  {inboxIntentLabelFor(detail.intent)} {Math.round(detail.intent_confidence * 100)}%
+                </span>
+                {completed ? (
+                  <span className="status statusIntentInterest">已完成</span>
+                ) : detail.follow_up_task_id ? (
+                  <span className="status statusResearch">待跟进</span>
+                ) : (
+                  <span className="status statusQualified">无需跟进</span>
+                )}
+              </div>
+              <h3>{detail.subject || "（无主题）"}</h3>
+              <p>发件人：{detail.sender_name || detail.sender_email} / {detail.sender_email}</p>
+              <p>收到时间：{formatDateTime(detail.received_at)}</p>
+              {detail.linked_company_name ? <p>关联客户：{detail.linked_company_name}</p> : null}
+              {detail.follow_up_task_id && detail.due_at ? (
+                <p>跟进截止：{formatDateTime(detail.due_at)}（{inboxDueLabel(detail.due_at)}）</p>
+              ) : null}
+            </article>
+            <div className="inboxDetailBlock">
+              <strong>邮件正文</strong>
+              <p className="inboxBodyText">{detail.body_text || "（无正文）"}</p>
+            </div>
+            <div className="inboxDetailBlock">
+              <strong>分析依据</strong>
+              <p className="inboxBodyText">{detail.analysis_rationale || "无分析依据。"}</p>
+            </div>
+            <div className="inboxDetailBlock">
+              <div className="inboxReplyHeader">
+                <strong>建议回复</strong>
+                <button className="textButton" type="button" onClick={copyReply}>
+                  {copied ? "已复制" : "复制"}
+                </button>
+              </div>
+              <p className="inboxBodyText">{detail.suggested_reply || "暂无建议回复。"}</p>
+            </div>
+            <div className="drawerActions">
+              {detail.follow_up_task_id && !completed ? (
+                <button className="outlineButton" type="button" disabled={completing} onClick={onMarkDone}>
+                  {completing ? "标记中..." : "标记完成"}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </aside>
+    </div>
   );
 }
 
@@ -2750,6 +3026,20 @@ export default function HomePage() {
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([]);
   const [loadingKnowledgeDocuments, setLoadingKnowledgeDocuments] = useState(false);
   const [uploadingKnowledgeDocument, setUploadingKnowledgeDocument] = useState(false);
+  const [inboxMessages, setInboxMessages] = useState<InboxMessageListItem[]>([]);
+  const [loadingInbox, setLoadingInbox] = useState(false);
+  const [inboxError, setInboxError] = useState("");
+  const [inboxIntentFilter, setInboxIntentFilter] = useState<InboxIntent | "all">("all");
+  const [inboxFollowUpOnly, setInboxFollowUpOnly] = useState(false);
+  const [inboxDueFrom, setInboxDueFrom] = useState("");
+  const [inboxDueBefore, setInboxDueBefore] = useState("");
+  const [syncingInbox, setSyncingInbox] = useState(false);
+  const [inboxSyncFeedback, setInboxSyncFeedback] = useState("");
+  const [inboxDetail, setInboxDetail] = useState<InboxMessageDetail | null>(null);
+  const [inboxDrawerOpen, setInboxDrawerOpen] = useState(false);
+  const [loadingInboxDetail, setLoadingInboxDetail] = useState(false);
+  const [completingInboxMessageId, setCompletingInboxMessageId] = useState("");
+  const [completedInboxIds, setCompletedInboxIds] = useState<string[]>([]);
   const [error, setError] = useState("");
 
   const selectedProductLine = useMemo(
@@ -2857,6 +3147,11 @@ export default function HomePage() {
       .then((items) => setKnowledgeDocuments(items))
       .catch((caught: unknown) => handleApiFailure(caught, "无法加载知识库文档"))
       .finally(() => setLoadingKnowledgeDocuments(false));
+    setLoadingInbox(true);
+    listInboxMessages(currentSession)
+      .then((items) => setInboxMessages(items))
+      .catch(() => setInboxError("无法加载收件箱。请确认后端 API 已启动。"))
+      .finally(() => setLoadingInbox(false));
   }, []);
 
   function handleApiFailure(caught: unknown, fallback: string) {
@@ -2950,6 +3245,106 @@ export default function HomePage() {
   function changeInquiryStatusFilter(statusFilter: WebsiteInquiryStatus | "all") {
     setInquiryStatusFilter(statusFilter);
     void refreshWebsiteInquiries(statusFilter);
+  }
+
+  async function refreshInbox(next?: {
+    intent?: InboxIntent | "all";
+    followUpOnly?: boolean;
+    dueFrom?: string;
+    dueBefore?: string;
+  }) {
+    if (!session) return;
+    const intent = next?.intent ?? inboxIntentFilter;
+    const followUpOnly = next?.followUpOnly ?? inboxFollowUpOnly;
+    const dueFrom = next?.dueFrom ?? inboxDueFrom;
+    const dueBefore = next?.dueBefore ?? inboxDueBefore;
+    const query: InboxListQuery = {};
+    if (intent !== "all") query.intent = intent;
+    if (followUpOnly) query.has_follow_up = true;
+    if (dueFrom) query.due_from = inboxDateStart(dueFrom);
+    if (dueBefore) query.due_before = inboxDateNextDay(dueBefore);
+    setLoadingInbox(true);
+    setInboxError("");
+    try {
+      const items = await listInboxMessages(session, query);
+      setInboxMessages(items);
+    } catch (caught) {
+      setInboxError(caught instanceof Error ? caught.message : "无法刷新收件箱");
+    } finally {
+      setLoadingInbox(false);
+    }
+  }
+
+  function changeInboxIntentFilter(intent: InboxIntent | "all") {
+    setInboxIntentFilter(intent);
+    void refreshInbox({ intent });
+  }
+
+  function changeInboxFollowUpOnly(followUpOnly: boolean) {
+    setInboxFollowUpOnly(followUpOnly);
+    void refreshInbox({ followUpOnly });
+  }
+
+  function changeInboxDueFrom(dueFrom: string) {
+    setInboxDueFrom(dueFrom);
+    void refreshInbox({ dueFrom });
+  }
+
+  function changeInboxDueBefore(dueBefore: string) {
+    setInboxDueBefore(dueBefore);
+    void refreshInbox({ dueBefore });
+  }
+
+  async function syncInboxNow() {
+    if (!session) return;
+    setSyncingInbox(true);
+    setInboxSyncFeedback("");
+    try {
+      const result = await syncInbox(session);
+      setInboxSyncFeedback(`同步完成，新增 ${result.synced} 封邮件`);
+      await refreshInbox();
+    } catch (caught) {
+      setInboxSyncFeedback(caught instanceof Error ? caught.message : "同步失败");
+    } finally {
+      setSyncingInbox(false);
+    }
+  }
+
+  async function openInboxMessage(messageId: string) {
+    if (!session) return;
+    setInboxDrawerOpen(true);
+    setInboxDetail(null);
+    setLoadingInboxDetail(true);
+    try {
+      const detail = await getInboxMessage(session, messageId);
+      setInboxDetail(detail);
+    } catch (caught) {
+      setInboxError(caught instanceof Error ? caught.message : "无法加载邮件详情");
+    } finally {
+      setLoadingInboxDetail(false);
+    }
+  }
+
+  function closeInboxMessage() {
+    setInboxDrawerOpen(false);
+    setInboxDetail(null);
+    setLoadingInboxDetail(false);
+  }
+
+  async function markInboxMessageDone(messageId: string) {
+    if (!session) return;
+    setCompletingInboxMessageId(messageId);
+    try {
+      await markInboxFollowUpDone(session, messageId);
+      setCompletedInboxIds((current) =>
+        current.includes(messageId) ? current : [...current, messageId]
+      );
+      await refreshInbox();
+    } catch (caught) {
+      setInboxError(caught instanceof Error ? caught.message : "标记完成失败");
+    } finally {
+      setCompletingInboxMessageId("");
+    }
   }
 
   async function refreshKnowledgeDocuments() {
@@ -4080,6 +4475,26 @@ export default function HomePage() {
             onRefresh={() => void refreshWebsiteInquiries()}
             onConvert={convertInquiryToCustomer}
           />
+          <InboxPanel
+            messages={inboxMessages}
+            loading={loadingInbox}
+            error={inboxError}
+            intentFilter={inboxIntentFilter}
+            followUpOnly={inboxFollowUpOnly}
+            dueFrom={inboxDueFrom}
+            dueBefore={inboxDueBefore}
+            isAdmin={session.organization_role === "admin"}
+            syncing={syncingInbox}
+            syncFeedback={inboxSyncFeedback}
+            completedIds={completedInboxIds}
+            onIntentFilterChange={changeInboxIntentFilter}
+            onFollowUpOnlyChange={changeInboxFollowUpOnly}
+            onDueFromChange={changeInboxDueFrom}
+            onDueBeforeChange={changeInboxDueBefore}
+            onRefresh={() => void refreshInbox()}
+            onSync={() => void syncInboxNow()}
+            onOpenMessage={(messageId) => void openInboxMessage(messageId)}
+          />
           <div className="secondaryGrid">
             <ReviewQueue
               drafts={emailDrafts}
@@ -4087,11 +4502,6 @@ export default function HomePage() {
               emailDeliveryStatus={emailDeliveryStatus}
               onOpen={() => openEmailDraftQueue()}
               onOpenDraft={openEmailDraftQueue}
-            />
-            <InboxPanel
-              records={followUps}
-              loading={loadingFollowUps}
-              onRefresh={refreshFollowUps}
             />
             <FollowUpTaskBoard
               tasks={followUpTasks}
@@ -4153,6 +4563,17 @@ export default function HomePage() {
         onApprove={approveEmailDraft}
         onMarkSent={markSelectedEmailDraftSent}
         onReject={rejectEmailDraft}
+      />
+      <InboxMessageDrawer
+        open={inboxDrawerOpen}
+        detail={inboxDetail}
+        loading={loadingInboxDetail}
+        completed={inboxDetail ? completedInboxIds.includes(inboxDetail.id) : false}
+        completing={inboxDetail ? completingInboxMessageId === inboxDetail.id : false}
+        onClose={closeInboxMessage}
+        onMarkDone={() => {
+          if (inboxDetail) void markInboxMessageDone(inboxDetail.id);
+        }}
       />
     </main>
   );
