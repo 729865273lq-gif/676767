@@ -59,6 +59,7 @@ description: AI 外贸销售平台(AI Foreign Trade Sales Platform)项目专属�
 
 ## 已知坑(踩过,别重踩)
 
+- **仓库路径**:项目已从 OneDrive 迁移到 `C:\Users\Administrator\Documents\外贸`(OneDrive 会静默移动/删除整棵仓库树,2026-08-18 已发生一次;旧 OneDrive 路径是空壳,不要再用)。桌面快捷方式与 start-platform.ps1 都指向 Documents 路径;启动脚本用 `Split-Path $MyInvocation.MyCommand.Path` 自定位,移动仓库无需改它
 - **docker compose 在中文目录名会报 `project name must not be empty`**:必须显式 `-p foreigntrade`(postgres/redis/minio 容器名与数据卷都以此为准)
 - **`npm run build` 会清 `.next` 顶掉正在跑的 dev server**:先停 dev 再 build,或 build 完成后重启 `npm run dev`
 - **alembic 迁移测试要求从 `backend` 目录启动**;从项目根目录跑会找不到 `../database/alembic`
