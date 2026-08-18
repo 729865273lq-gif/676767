@@ -59,10 +59,10 @@ description: AI 外贸销售平台(AI Foreign Trade Sales Platform)项目专属�
 
 ## 已知坑(踩过,别重踩)
 
-- **仓库路径**:项目已从 OneDrive 迁移到 `C:\Users\Administrator\Documents\外贸`(OneDrive 会静默移动/删除整棵仓库树,2026-08-18 已发生一次;旧 OneDrive 路径是空壳,不要再用)。桌面快捷方式与 start-platform.ps1 都指向 Documents 路径;启动脚本用 `Split-Path $MyInvocation.MyCommand.Path` 自定位,移动仓库无需改它
+- **仓库路径(2026-08-18 更新)**:项目位于 `C:\Users\Administrator\Documents\外贸`(纯本地,**不再使用 OneDrive**——它曾静默搬移/删除整棵仓库树并反复破坏 `.next`)。桌面快捷方式与 start-platform.ps1 都指向此路径;启动脚本用 `Split-Path $MyInvocation.MyCommand.Path` 自定位,移动仓库无需改它。不要放回任何云同步目录
 - **docker compose 在中文目录名会报 `project name must not be empty`**:必须显式 `-p foreigntrade`(postgres/redis/minio 容器名与数据卷都以此为准)
 - **`npm run build` 会清 `.next` 顶掉正在跑的 dev server**:先停 dev 再 build,或 build 完成后重启 `npm run dev`
 - **alembic 迁移测试要求从 `backend` 目录启动**;从项目根目录跑会找不到 `../database/alembic`
 - **SQLite 测试覆盖不到 pgvector**:向量检索改动后,除单测外必须做一次真实 Postgres 检索冒烟
-- **OneDrive 会破坏 `.next`**:`npm run build` 后再跑 dev 可能报 `EINVAL readlink .next\server\vendor-chunks\@swc.js`,页面也可能报 `Cannot find module './NNN.js'`(webpack-runtime 找不到分块)——都是 `.next` 被云同步/构建交叉搞坏,删掉 `frontend\.next` 后重启 `npm run dev` 即可;浏览器端如仍报错,硬刷新(Ctrl+F5)
+- **云同步目录曾破坏 `.next`**(EINVAL readlink / Cannot find module './NNN.js'):项目已迁出 OneDrive,此类问题不应再出现;若 `.next` 仍报错,删掉 `frontend\.next` 重启 `npm run dev`,浏览器硬刷新(Ctrl+F5)
 - PowerShell 传中文给 Python 脚本会变乱码:临时验证脚本里用 Unicode 转义,浏览器/UTF-8 通道不受影响
