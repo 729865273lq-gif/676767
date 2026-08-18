@@ -528,7 +528,7 @@ function ProductLineSetup({
   );
 }
 
-const DEFAULT_SEARCH_KEYWORD_LANGUAGES = ["en", "de", "es", "fr", "pt", "tr", "ru"];
+const DEFAULT_SEARCH_KEYWORD_LANGUAGES = ["en", "vi", "th", "id", "ms", "ru"];
 
 function MultilingualKeywordsEditor({
   session,

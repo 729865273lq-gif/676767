@@ -82,6 +82,18 @@ COUNTRY_LANGUAGE: dict[str, str] = {
     "vn": "vi", "vi": "vi", "vietnam": "vi", "越南": "vi",
     "th": "th", "thailand": "th", "泰国": "th",
     "id": "id", "indonesia": "id", "印度尼西亚": "id", "印尼": "id",
+    "my": "ms", "ms": "ms", "malaysia": "ms", "马来西亚": "ms", "马来": "ms",
+    "ph": "en", "philippines": "en", "菲律宾": "en",
+    "sg": "en", "singapore": "en", "新加坡": "en",
+    "mm": "my", "myanmar": "my", "burma": "my", "缅甸": "my",
+    "kh": "km", "km": "km", "cambodia": "km", "柬埔寨": "km",
+    "la": "lo", "lo": "lo", "laos": "lo", "老挝": "lo",
+    "kz": "ru", "kazakhstan": "ru", "哈萨克斯坦": "ru", "哈萨克": "ru",
+    "uz": "uz", "uzbekistan": "uz", "乌兹别克斯坦": "uz", "乌兹别克": "uz",
+    "kg": "ru", "kyrgyzstan": "ru", "吉尔吉斯斯坦": "ru", "吉尔吉斯": "ru",
+    "tj": "ru", "tajikistan": "ru", "塔吉克斯坦": "ru", "塔吉克": "ru",
+    "tm": "ru", "turkmenistan": "ru", "土库曼斯坦": "ru", "土库曼": "ru",
+    "mn": "mn", "mongolia": "mn", "蒙古": "mn",
     "jp": "ja", "ja": "ja", "japan": "ja", "日本": "ja",
     "kr": "ko", "ko": "ko", "korea": "ko", "south korea": "ko", "韩国": "ko", "南韩": "ko",
     "in": "en", "india": "en", "印度": "en",
@@ -261,7 +273,9 @@ def _build_translation_prompt(name: str, keywords: list[str], language: str) -> 
         "要求：\n"
         "1. 最多输出 8 个最相关的 B2B 搜索关键词；\n"
         "2. 包含当地分销商/经销商/批发商/进口商等采购方常用术语；\n"
-        "3. 只输出严格 JSON，不要输出任何解释、代码块或多余文字。\n"
+        "3. 若目标语言是俄语（ru），使用俄语商业术语（如 дистрибьютор、оптовик、поставщик），"
+        "符合中亚市场习惯；\n"
+        "4. 只输出严格 JSON，不要输出任何解释、代码块或多余文字。\n"
         '输出格式：{"keywords": ["关键词1", "关键词2", ...]}'
     )
 

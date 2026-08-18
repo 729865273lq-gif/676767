@@ -17,6 +17,20 @@ def test_country_to_language_maps_iso2_codes_case_insensitively() -> None:
     assert country_to_language("vn") == "vi"
     assert country_to_language("mx") == "es"
     assert country_to_language("ar") == "ar"
+    assert country_to_language("th") == "th"
+    assert country_to_language("id") == "id"
+    assert country_to_language("my") == "ms"
+    assert country_to_language("ph") == "en"
+    assert country_to_language("sg") == "en"
+    assert country_to_language("mm") == "my"
+    assert country_to_language("kh") == "km"
+    assert country_to_language("la") == "lo"
+    assert country_to_language("kz") == "ru"
+    assert country_to_language("uz") == "uz"
+    assert country_to_language("kg") == "ru"
+    assert country_to_language("tj") == "ru"
+    assert country_to_language("tm") == "ru"
+    assert country_to_language("mn") == "mn"
 
 
 def test_country_to_language_accepts_common_country_names() -> None:
@@ -36,6 +50,9 @@ def test_country_to_language_accepts_chinese_country_names() -> None:
     assert country_to_language("日本") == "ja"
     assert country_to_language("韩国") == "ko"
     assert country_to_language("巴西") == "pt"
+    assert country_to_language("马来西亚") == "ms"
+    assert country_to_language("哈萨克斯坦") == "ru"
+    assert country_to_language("乌兹别克斯坦") == "uz"
 
 
 def test_country_to_language_falls_back_to_english() -> None:
