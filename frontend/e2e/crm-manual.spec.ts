@@ -360,6 +360,21 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
     });
   });
   await page.route(/\/discovery\/organizations\/org-1\/email-drafts\/draft-1$/, async (route) => {
+    if (route.request().method() !== "POST") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          ...emailDrafts[0],
+          quality: {
+            passed: true,
+            issues: [],
+            product_evidence: ["product: Industrial LED supply"],
+            customer_evidence: ["customer: Berlin Lighting GmbH"],
+          },
+        }),
+      });
+      return;
+    }
     const payload = route.request().postDataJSON();
     expect(payload).toMatchObject({
       subject: "Updated LED introduction",
@@ -613,6 +628,13 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
     await route.fulfill({ contentType: "application/json", body: JSON.stringify(quoteDrafts.find((draft) => draft.id === "quote-1")) });
   });
 
+  await page.route(/\/knowledge\/organizations\/org-1\/documents$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
+  await page.route(/\/organizations\/org-1\/inbox(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
+
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "CRM 客户" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "客户搜索源" })).toBeVisible();
@@ -668,14 +690,15 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   await page.getByRole("button", { name: "扫描公开联系方式" }).click();
   await expect(page.locator(".contactList").getByText("Buyer Desk")).toBeVisible();
   await page.locator(".contactList li").filter({ hasText: "Anna Weber" }).getByRole("button", { name: "生成开发信草稿" }).click();
-  await expect(page.getByLabel("邮件审核队列").getByText("Berlin Lighting GmbH")).toBeVisible();
-  await expect(page.getByLabel("邮件审核队列").getByText("可发送")).toBeVisible();
-  await expect(page.getByLabel("邮件审核队列").getByText("邮箱验证：ZeroBounce / valid")).toBeVisible();
+  const reviewDrawer = page.locator(".reviewDrawer");
+  await expect(reviewDrawer.getByText("To: Anna Weber / anna@berlin-lighting.example")).toBeVisible();
+  await expect(reviewDrawer.getByText("可发送")).toBeVisible();
+  await expect(reviewDrawer.getByText("邮箱验证：ZeroBounce / valid")).toBeVisible();
   await expect(page.getByLabel("客户邮箱地址")).toHaveValue("anna@berlin-lighting.example");
   await page.getByLabel("客户邮箱地址").fill("new-buyer@berlin-lighting.example");
   await page.getByRole("button", { name: "保存邮箱" }).click();
   await expect(page.getByLabel("客户邮箱地址")).toHaveValue("new-buyer@berlin-lighting.example");
-  await expect(page.getByLabel("邮件审核队列").getByText("邮箱验证：未验证")).toBeVisible();
+  await expect(reviewDrawer.getByText("邮箱验证：未验证")).toBeVisible();
   await page.getByLabel("邮件主题").fill("Updated LED introduction");
   await page.getByLabel("邮件正文").fill("Updated approved body.");
   await page.getByRole("button", { name: "保存修改" }).click();
@@ -736,8 +759,8 @@ test("manually adds and deletes a CRM customer", async ({ page }) => {
   await page.getByLabel("跟进类型").selectOption("reply");
   await page.getByLabel("跟进内容").fill("客户回复：请提供 500 套样品报价。");
   await page.getByRole("button", { name: "添加跟进记录" }).click();
-  await expect(page.getByLabel("客户回复列表").getByText("Berlin Lighting GmbH")).toBeVisible();
-  await expect(page.getByLabel("客户回复列表").getByText("客户回复：请提供 500 套样品报价。")).toBeVisible();
+  await expect(page.locator(".followUpList").getByText("客户回复：请提供 500 套样品报价。")).toBeVisible();
+  await expect(page.locator(".followUpList").getByText("reply")).toBeVisible();
   await expect(page.getByLabel("销售指标").locator(".metricTile").filter({ hasText: "客户回复" }).getByText("1")).toBeVisible();
   await page.getByLabel("关闭客户详情").click();
 

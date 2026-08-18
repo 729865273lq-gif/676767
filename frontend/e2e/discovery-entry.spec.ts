@@ -244,6 +244,13 @@ test("creates a product line and displays discovered leads", async ({ page }) =>
     await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
   });
 
+  await page.route(/\/knowledge\/organizations\/org-1\/documents$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
+  await page.route(/\/organizations\/org-1\/inbox(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
+
   await page.goto("/");
   const productForm = page.locator(".productForm");
   await productForm.getByLabel("产品线名称").fill("Industrial LED lighting");

@@ -109,6 +109,20 @@ test("registers a workspace, stores the session, and opens the dashboard", async
       body: JSON.stringify([]),
     });
   });
+  await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/organizations\/org-1\/inbox(?:\?.*)?$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      status: 200,
+      body: JSON.stringify([]),
+    });
+  });
+  await page.route(/http:\/\/(localhost|127\.0\.0\.1):8000\/knowledge\/organizations\/org-1\/documents$/, async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      status: 200,
+      body: JSON.stringify([]),
+    });
+  });
 
   await page.goto("/login");
   await page.getByRole("button", { name: "第一次使用？创建工作区" }).click();

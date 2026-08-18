@@ -198,6 +198,13 @@ test("converts a website inquiry into a CRM customer", async ({ page }) => {
     });
   });
 
+  await page.route(/\/knowledge\/organizations\/org-1\/documents$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
+  await page.route(/\/organizations\/org-1\/inbox(?:\?.*)?$/, async (route) => {
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify([]) });
+  });
+
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "独立站询盘" })).toBeVisible();
   await expect(page.getByLabel("独立站表单链接").getByText("LED Floodlight 200W")).toBeVisible();
