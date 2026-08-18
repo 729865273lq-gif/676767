@@ -26,6 +26,17 @@ export type ProductItem = {
   is_published: boolean;
 };
 
+export type SearchKeywordRow = {
+  id: string;
+  product_line_id: string;
+  language: string;
+  keywords: string[];
+  source: "auto" | "manual";
+  updated_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type PublicProductItem = {
   id: string;
   name: string;
@@ -571,6 +582,34 @@ export async function deleteProductItem(session: Session, productItemId: string)
     session,
     `/platform/organizations/${session.organization_id}/product-items/${productItemId}`,
     { method: "DELETE" }
+  );
+}
+
+export function listSearchKeywords(session: Session, productLineId: string) {
+  return requestJson<SearchKeywordRow[]>(
+    session,
+    `/platform/organizations/${session.organization_id}/product-lines/${productLineId}/search-keywords`
+  );
+}
+
+export function translateSearchKeywords(session: Session, productLineId: string, languages: string[]) {
+  return requestJson<SearchKeywordRow[]>(
+    session,
+    `/platform/organizations/${session.organization_id}/product-lines/${productLineId}/search-keywords/translate`,
+    { method: "POST", body: JSON.stringify({ languages }) }
+  );
+}
+
+export function overrideSearchKeywords(
+  session: Session,
+  productLineId: string,
+  language: string,
+  keywords: string[]
+) {
+  return requestJson<SearchKeywordRow>(
+    session,
+    `/platform/organizations/${session.organization_id}/product-lines/${productLineId}/search-keywords/${encodeURIComponent(language)}`,
+    { method: "PUT", body: JSON.stringify({ keywords }) }
   );
 }
 

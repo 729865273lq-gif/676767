@@ -68,6 +68,7 @@ from app.crm.service import BLOCKED_EMAIL_VERIFICATION_STATUSES, LeadService, no
 from app.platform.product_lines import ProductItemNotFound, ProductLineNotFound, ProductLineService
 from app.platform.models import SearchSourcePreference
 from app.platform.router import current_principal, get_session
+from app.platform.search_keywords import build_search_keyword_provider
 from app.platform.service import OrganizationService
 from app.shared.security import SignedPrincipal
 from app.workflow.models import WorkflowRun, WorkflowState
@@ -828,6 +829,9 @@ async def start_discovery(
         service = CustomerDiscoveryService(
             session,
             build_customer_search_connector(organization_id, request, session, discovery_payload),
+            keyword_provider=build_search_keyword_provider(
+                getattr(request.app.state, "llm_connector", None)
+            ),
         )
         output = await service.start(
             actor_user_id=principal.user_id,

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.connectors.llm import ChatProviderError
 from app.platform.credentials import CredentialCipher, CredentialService
 from app.platform.auth import AuthService
 from app.platform.models import Organization, SearchSourcePreference, UserMembership
@@ -15,6 +17,13 @@ from app.platform.product_lines import (
     ProductLineInUse,
     ProductLineNotFound,
     ProductLineService,
+)
+from app.platform.search_keywords import (
+    TranslationError,
+    country_to_language,
+    ensure_keywords_for_search,
+    list_search_keywords,
+    set_keywords_override,
 )
 from app.platform.service import OrganizationService, TenantAccessDenied
 from app.shared.security import InvalidPrincipalToken, PrincipalTokenCodec, SignedPrincipal
@@ -171,6 +180,26 @@ class ProductSupplierResponse(BaseModel):
     name: str
     website: str | None
     notes: str
+
+
+class TranslateSearchKeywordsRequest(BaseModel):
+    languages: list[str] = Field(default_factory=list, max_length=20)
+    countries: list[str] = Field(default_factory=list, max_length=20)
+
+
+class SetSearchKeywordsRequest(BaseModel):
+    keywords: list[str] = Field(default_factory=list, max_length=100)
+
+
+class SearchKeywordResponse(BaseModel):
+    id: str
+    product_line_id: str
+    language: str
+    keywords: list[str]
+    source: str
+    updated_by_user_id: str | None
+    created_at: datetime
+    updated_at: datetime
 
 
 def get_session(request: Request) -> Generator[Session, None, None]:
@@ -914,3 +943,122 @@ def add_product_supplier(
         website=supplier.website,
         notes=supplier.notes,
     )
+
+
+def search_keyword_response(row) -> SearchKeywordResponse:
+    return SearchKeywordResponse(
+        id=row.id,
+        product_line_id=row.product_line_id,
+        language=row.language,
+        keywords=row.keywords,
+        source=row.source.value,
+        updated_by_user_id=row.updated_by_user_id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _resolve_translation_languages(payload: TranslateSearchKeywordsRequest) -> list[str]:
+    if payload.languages:
+        return list(
+            dict.fromkeys(
+                language.strip().casefold() for language in payload.languages if language.strip()
+            )
+        )
+    if payload.countries:
+        return list(
+            dict.fromkeys(
+                country_to_language(country) for country in payload.countries if country.strip()
+            )
+        )
+    return ["en"]
+
+
+@router.post(
+    "/organizations/{organization_id}/product-lines/{product_line_id}/search-keywords/translate",
+    response_model=list[SearchKeywordResponse],
+)
+def translate_search_keywords(
+    organization_id: str,
+    product_line_id: str,
+    payload: TranslateSearchKeywordsRequest,
+    request: Request,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> list[SearchKeywordResponse]:
+    try:
+        OrganizationService(session).require_admin(principal.user_id, organization_id)
+        product_line = ProductLineService(session).get_product_line(product_line_id, organization_id)
+    except TenantAccessDenied as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except ProductLineNotFound as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
+    languages = _resolve_translation_languages(payload)
+    llm = getattr(request.app.state, "llm_connector", None)
+    rows = []
+    missing = []
+    try:
+        for language in languages:
+            row = ensure_keywords_for_search(session, llm, product_line, language)
+            if row is None:
+                missing.append(language)
+            else:
+                rows.append(row)
+    except (TranslationError, ChatProviderError) as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+    if missing:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"翻译服务未配置，无法翻译：{', '.join(missing)}",
+        )
+    session.commit()
+    return [search_keyword_response(row) for row in rows]
+
+
+@router.get(
+    "/organizations/{organization_id}/product-lines/{product_line_id}/search-keywords",
+    response_model=list[SearchKeywordResponse],
+)
+def list_product_line_search_keywords(
+    organization_id: str,
+    product_line_id: str,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> list[SearchKeywordResponse]:
+    try:
+        OrganizationService(session).require_membership(principal.user_id, organization_id)
+        product_line = ProductLineService(session).get_product_line(product_line_id, organization_id)
+    except TenantAccessDenied as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except ProductLineNotFound as error:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    return [search_keyword_response(row) for row in list_search_keywords(session, product_line)]
+
+
+@router.put(
+    "/organizations/{organization_id}/product-lines/{product_line_id}/search-keywords/{language}",
+    response_model=SearchKeywordResponse,
+)
+def override_search_keywords(
+    organization_id: str,
+    product_line_id: str,
+    language: str,
+    payload: SetSearchKeywordsRequest,
+    principal: SignedPrincipal = Depends(current_principal),
+    session: Session = Depends(get_session),
+) -> SearchKeywordResponse:
+    try:
+        OrganizationService(session).require_admin(principal.user_id, organization_id)
+        product_line = ProductLineService(session).get_product_line(product_line_id, organization_id)
+        row = set_keywords_override(session, product_line, language, payload.keywords, principal.user_id)
+        session.commit()
+    except TenantAccessDenied as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
+    except ProductLineNotFound as error:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+    return search_keyword_response(row)

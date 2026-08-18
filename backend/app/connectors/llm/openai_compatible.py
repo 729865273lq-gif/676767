@@ -118,10 +118,18 @@ class OpenAICompatibleChatConnector:
             "not_now, not_interested, out_of_office, other. Reply with only the word.\n"
             f"Subject: {subject}\nBody: {body}"
         )
+        content = self._chat_completion("You classify sales reply intent.", prompt)
+        return _normalize_intent_token(content) or None
+
+    def chat_text(self, prompt: str) -> str:
+        """Return the model's raw text answer for a plain prompt."""
+        return self._chat_completion("You are a helpful assistant.", prompt)
+
+    def _chat_completion(self, system: str, prompt: str) -> str:
         payload = {
             "model": self._model,
             "messages": [
-                {"role": "system", "content": "You classify sales reply intent."},
+                {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
             "temperature": 0,
@@ -143,7 +151,7 @@ class OpenAICompatibleChatConnector:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
             raise ChatProviderError("chat provider returned an invalid response") from error
-        return _normalize_intent_token(str(content)) or None
+        return str(content)
 
     def close(self) -> None:
         """Release the shared httpx client."""

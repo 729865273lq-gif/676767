@@ -14,6 +14,7 @@ from app.connectors.search import SearchConnector
 from app.crm.scoring import qualify_lead
 from app.crm.service import LeadService
 from app.platform.product_lines import ProductLineService
+from app.platform.search_keywords import KeywordPlan
 from app.platform.service import OrganizationService
 from app.workflow.models import WorkflowState
 from app.workflow.service import WorkflowService
@@ -130,9 +131,15 @@ class CustomerAgent:
     input_model = CustomerDiscoveryInput
     output_model = CustomerDiscoveryOutput
 
-    def __init__(self, session: Session, search_connector: SearchConnector):
+    def __init__(
+        self,
+        session: Session,
+        search_connector: SearchConnector,
+        keyword_provider=None,
+    ):
         self.session = session
         self.search_connector = search_connector
+        self._keyword_provider = keyword_provider
 
     async def run(
         self, context: AgentRunContext, payload: CustomerDiscoveryInput
@@ -141,11 +148,17 @@ class CustomerAgent:
             payload.product_line_id, context.organization_id
         )
         excluded_keywords = [*product_line.excluded_keywords, *payload.excluded_keywords]
+        keyword_plan = None
+        if self._keyword_provider is not None:
+            keyword_plan = self._keyword_provider(
+                self.session, product_line, payload.location_country_code
+            )
         queries = build_discovery_queries(
             product_line.name,
             product_line.product_keywords,
             payload,
             excluded_keywords=excluded_keywords,
+            keyword_plan=keyword_plan,
         )
         per_query_limit = min(payload.limit, 30, max(8, math.ceil(payload.limit / len(queries))))
         batches = await run_search_queries(self.search_connector, queries, per_query_limit)
@@ -224,9 +237,14 @@ class CustomerDiscoveryInProgress(RuntimeError):
 
 
 class CustomerDiscoveryService:
-    def __init__(self, session: Session, search_connector: SearchConnector):
+    def __init__(
+        self,
+        session: Session,
+        search_connector: SearchConnector,
+        keyword_provider=None,
+    ):
         self.session = session
-        self.agent = CustomerAgent(session, search_connector)
+        self.agent = CustomerAgent(session, search_connector, keyword_provider=keyword_provider)
 
     async def start(
         self,
@@ -297,7 +315,10 @@ def build_discovery_queries(
     payload: CustomerDiscoveryInput,
     *,
     excluded_keywords: list[str] | None = None,
+    keyword_plan: KeywordPlan | None = None,
 ) -> list[str]:
+    if keyword_plan is not None:
+        return _build_multilingual_queries(product_line_name, keywords, payload, keyword_plan)
     query_limit = 4 if payload.limit <= 20 else 6 if payload.limit <= 50 else 8
     primary_query = build_discovery_query(product_line_name, keywords, payload)
     products = product_query_terms(product_line_name, keywords)
@@ -329,6 +350,31 @@ def build_discovery_queries(
         fallback_index += 1
         if fallback_index > len(products) * len(buyers):
             break
+    return queries[:query_limit]
+
+
+def _build_multilingual_queries(
+    product_line_name: str,
+    keywords: list[str],
+    payload: CustomerDiscoveryInput,
+    keyword_plan: KeywordPlan,
+) -> list[str]:
+    query_limit = 4 if payload.limit <= 20 else 6 if payload.limit <= 50 else 8
+    markets = market_query_terms(payload.target_market)
+    market = markets[0]
+    queries: list[str] = []
+
+    def add(query: str) -> None:
+        normalized = " ".join(query.split())
+        if normalized and normalized.casefold() not in {item.casefold() for item in queries}:
+            queries.append(normalized)
+
+    for keyword in [*keyword_plan.localized, *keyword_plan.english]:
+        add(f"{keyword} {market}")
+    first_localized = keyword_plan.localized[0] if keyword_plan.localized else ""
+    for city in markets[1:]:
+        if first_localized:
+            add(f"{first_localized} {city}")
     return queries[:query_limit]
 
 

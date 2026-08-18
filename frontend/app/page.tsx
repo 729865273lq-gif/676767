@@ -32,15 +32,18 @@ import {
   listKnowledgeDocuments,
   listLeads,
   listProductLines,
+  listSearchKeywords,
   listSearchSources,
   listWebsiteInquiries,
   markEmailDraftSent,
   markInboxFollowUpDone,
   markQuoteDraftSent,
+  overrideSearchKeywords,
   reviewEmailDraft,
   resolveAdministrativeLocation,
   startDiscovery,
   syncInbox,
+  translateSearchKeywords,
   updateEmailDraft,
   updateDraftContactEmail,
   updateLeadDetail,
@@ -70,6 +73,7 @@ import {
   type ProductItem,
   type ProductLine,
   type QuoteDraft,
+  type SearchKeywordRow,
   type SearchSource,
   type WebsiteInquiry,
   type WebsiteInquiryStatus,
@@ -437,6 +441,7 @@ function ProductLineSetup({
   loading,
   creating,
   deletingProductLineId,
+  session,
   onCreate,
   onDelete,
 }: {
@@ -444,6 +449,7 @@ function ProductLineSetup({
   loading: boolean;
   creating: boolean;
   deletingProductLineId: string;
+  session: Session;
   onCreate: (event: FormEvent<HTMLFormElement>) => void;
   onDelete: (productLineId: string) => void;
 }) {
@@ -512,12 +518,141 @@ function ProductLineSetup({
                 >
                   {deletingProductLineId === productLine.id ? "删除中..." : "删除"}
                 </button>
+                <MultilingualKeywordsEditor session={session} productLine={productLine} />
               </article>
             ))
           )}
         </div>
       </div>
     </section>
+  );
+}
+
+const DEFAULT_SEARCH_KEYWORD_LANGUAGES = ["en", "de", "es", "fr", "pt", "tr", "ru"];
+
+function MultilingualKeywordsEditor({
+  session,
+  productLine,
+}: {
+  session: Session;
+  productLine: ProductLine;
+}) {
+  const [rows, setRows] = useState<SearchKeywordRow[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [loading, setLoading] = useState(true);
+  const [translating, setTranslating] = useState(false);
+  const [savingLanguage, setSavingLanguage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    listSearchKeywords(session, productLine.id)
+      .then((items) => {
+        if (!active) return;
+        setRows(items);
+        setDrafts(Object.fromEntries(items.map((row) => [row.language, row.keywords.join(", ")])));
+        setError("");
+      })
+      .catch((caught) => {
+        if (!active) return;
+        setError(caught instanceof Error ? caught.message : "无法加载多语言关键词");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [session, productLine.id]);
+
+  async function runTranslate() {
+    setTranslating(true);
+    setError("");
+    try {
+      const items = await translateSearchKeywords(
+        session,
+        productLine.id,
+        DEFAULT_SEARCH_KEYWORD_LANGUAGES
+      );
+      setRows(items);
+      setDrafts(Object.fromEntries(items.map((row) => [row.language, row.keywords.join(", ")])));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "自动翻译失败");
+    } finally {
+      setTranslating(false);
+    }
+  }
+
+  async function saveRow(language: string) {
+    const keywords = (drafts[language] ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    setSavingLanguage(language);
+    setError("");
+    try {
+      const updated = await overrideSearchKeywords(session, productLine.id, language, keywords);
+      setRows((current) =>
+        [...current.filter((row) => row.language !== updated.language), updated].sort((a, b) =>
+          a.language.localeCompare(b.language)
+        )
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "保存关键词失败");
+    } finally {
+      setSavingLanguage("");
+    }
+  }
+
+  return (
+    <div className="multilingualKeywords">
+      <div className="multilingualKeywordsHeader">
+        <strong>多语言搜索关键词</strong>
+        <button
+          className="outlineButton"
+          type="button"
+          onClick={runTranslate}
+          disabled={translating}
+        >
+          {translating ? "翻译中..." : "自动翻译"}
+        </button>
+      </div>
+      {error ? <small className="multilingualError">{error}</small> : null}
+      {loading ? (
+        <small className="fieldHint">加载中...</small>
+      ) : rows.length === 0 ? (
+        <small className="fieldHint">尚未生成翻译，点击“自动翻译”生成常用语言关键词。</small>
+      ) : (
+        <div className="multilingualRows">
+          {rows.map((row) => (
+            <div className="keywordRow" key={row.id}>
+              <span
+                className={`keywordBadge ${row.source === "auto" ? "keywordBadgeAuto" : "keywordBadgeManual"}`}
+              >
+                {row.source === "auto" ? "自动" : "手动"}
+              </span>
+              <label className="keywordLanguage">{row.language}</label>
+              <input
+                value={drafts[row.language] ?? row.keywords.join(", ")}
+                onChange={(event) =>
+                  setDrafts((current) => ({ ...current, [row.language]: event.target.value }))
+                }
+                placeholder="逗号分隔的关键词"
+              />
+              <button
+                className="primaryButton keywordSave"
+                type="button"
+                disabled={savingLanguage === row.language}
+                onClick={() => saveRow(row.language)}
+              >
+                {savingLanguage === row.language ? "保存中..." : "保存"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -4447,6 +4582,7 @@ export default function HomePage() {
             loading={loadingProductLines}
             creating={creatingProductLine}
             deletingProductLineId={deletingProductLineId}
+            session={session}
             onCreate={createProductLineFromForm}
             onDelete={deleteProductLineRecord}
           />
